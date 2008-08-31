@@ -1,5 +1,5 @@
-Waft version 0.52
-=================
+Waft version 0.99_01
+====================
 
 The README is used to introduce the module and provide instructions on
 how to install the module, any machine dependencies it may have (for
@@ -23,7 +23,7 @@ To install this module type the following:
 
 COPYRIGHT AND LICENCE
 
-Copyright (C) 2007 by Yuji Tamashiro
+Copyright (C) 2007, 2008 by Yuji Tamashiro
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself.

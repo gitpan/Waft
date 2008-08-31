@@ -2,123 +2,270 @@ package Waft;
 
 use 5.005;
 use strict;
-use vars qw( $VERSION );
-use Carp;
+use vars qw( $VERSION @CARP_NOT );
+BEGIN { eval { require warnings } ? 'warnings'->import : ( $^W = 1 ) }
+
+use CGI qw( -no_debug );
 use English qw( -no_match_vars );
-use Fcntl;
+use Fcntl qw( :DEFAULT );
 use Symbol;
-require B;
+require Carp;
 require File::Spec;
 
-$VERSION = '0.52';
+$VERSION = '0.99_01';
+$VERSION = eval $VERSION;
+
+$Waft::Backword_compatible_version = $VERSION;
+$Waft::Correct_NEXT_DISTINCT = 1;
+
+{
+    my %Backword_compatible_version_of;
+
+    sub set_waft_backword_compatible_version {
+        my ($class, $backword_compatible_version) = @_;
+
+        $class->croak('This is class method') if $class->is_blessed;
+
+        $Backword_compatible_version_of{$class}
+            = $backword_compatible_version;
+
+        return;
+    }
+
+    sub get_waft_backword_compatible_version {
+        my ($self) = @_;
+
+        my $class = ref $self || $self;
+
+        my $backword_compatible_version
+            = $Backword_compatible_version_of{$class}
+              || $Waft::Backword_compatible_version
+              || __PACKAGE__->VERSION;
+
+        return $backword_compatible_version;
+    }
+}
+
+*BCV = *BCV = \&get_waft_backword_compatible_version;
+
+sub is_blessed {
+    my ($self) = @_;
+
+    my $is_blessed = ref $self;
+
+    return $is_blessed;
+}
+
+sub croak {
+    my ($self, $error_message) = @_;
+
+    $self->dont_trust_me( sub { Carp::croak($_[0]) }, $error_message );
+
+    return;
+}
+
+sub dont_trust_me {
+    my ($self, $coderef, @args) = @_;
+
+    my $untrusted_class = ref $self || $self;
+
+    *Waft::untrusted_class_ISA
+        = do { no strict 'refs'; \@{ "${untrusted_class}::ISA" } };
+    my @untrusted_class_ISA = @Waft::untrusted_class_ISA;
+
+    @Waft::untrusted_class_ISA = ();
+    local @CARP_NOT = (@CARP_NOT, 'NEXT'); # but trust NEXT
+
+    eval { $coderef->(@args) };
+
+    @Waft::untrusted_class_ISA = @untrusted_class_ISA;
+
+    die $EVAL_ERROR if $EVAL_ERROR;
+
+    return;
+}
+
+sub carp {
+    my ($self, $error_message) = @_;
+
+    $self->dont_trust_me( sub { Carp::carp($_[0]) }, $error_message );
+
+    return;
+}
+
+{
+    my %Default_content_type_of;
+
+    sub set_default_content_type {
+        my ($class, $default_content_type) = @_;
+
+        $class->croak('This is class method') if $class->is_blessed;
+
+        $Default_content_type_of{$class} = $default_content_type;
+
+        return;
+    }
+
+    sub get_default_content_type {
+        my ($self) = @_;
+
+        my $class = ref $self || $self;
+
+        my $default_content_type = $Default_content_type_of{$class}
+                                   || 'text/html';
+
+        return $default_content_type;
+    }
+}
+
+sub use_utf8 {
+    my ($class) = @_;
+
+    $class->set_using_utf8(1);
+
+    return;
+}
+
+{
+    my %Using_utf8;
+
+    sub set_using_utf8 {
+        my ($class, $using_utf8) = @_;
+
+        $class->croak('This is class method') if $class->is_blessed;
+
+        return if $using_utf8 and not $class->can_use_utf8;
+
+        $Using_utf8{$class} = $using_utf8;
+
+        return;
+    }
+
+    sub get_using_utf8 {
+        my ($self) = @_;
+
+        if ($self->BCV < 0.53) {
+            return $self->stash->{use_utf8} if $self->is_blessed;
+        }
+
+        my $class = ref $self || $self;
+
+        my $using_utf8 = $Using_utf8{$class};
+
+        return $using_utf8;
+    }
+}
+
+sub can_use_utf8 {
+    my ($self) = @_;
+
+    eval { require 5.008001 };
+    return 1 if not $EVAL_ERROR;
+    $self->carp($EVAL_ERROR);
+
+    return;
+}
 
 sub waft {
     my ($self, @args) = @_;
 
-    my @porter;
-
-    if (ref $self) {
-        @porter = @args;
-    }
-    else {
-        ($self, @porter) = $self->new(@args);
-    }
-
-    my $stash = $self->stash;
-
-    $stash->{url} = _get_url();
-
-    {
-        no strict 'refs';
-
-        if ($stash->{use_utf8}) {
-            eval q{binmode select, ':utf8'};
+    if ($self->BCV < 0.53) {
+        if ( not $self->is_blessed ) {
+            ($self, @args) = $self->new(@args);
         }
-        else {
-            binmode select;
-        }
+
+        $self->init_base_url;
+        $self->init_binmode;
+        $self->_load_query_param;
     }
 
-    $self->Waft::_load_query_param;
+    if ( not $self->is_blessed ) {
+        $self = $self->new->initialize;
+    }
 
-    @porter = $self->Waft::_call_method( $self->can('begin'), @porter );
-    @porter = $self->Waft::_controller(@porter);
-    @porter = $self->end(@porter);
+    local $NEXT::SEEN if $NEXT::SEEN and $Waft::Correct_NEXT_DISTINCT;
+    my @return_values = $self->controller(@args);
 
-    return wantarray ? @porter : $porter[0];
+    return wantarray ? ($self, @return_values) : $self;
 }
 
 sub new {
-    my ($class, @args) = @_;
-
-    my @porter;
-
-    if (ref $args[0] eq 'HASH') {
-        (my $arg_hashref, @porter) = @args;
-        @args = %$arg_hashref;
-    }
+    my ($class) = @_;
 
     my $self;
-    tie %$self, 'Waft::Object';
+    tie %$self, 'Waft::Class';
     bless $self, $class;
 
-    my $stash = $self->stash;
+    if ($class->BCV < 0.53) {
+        ( undef, my @args ) = @_;
 
-    %$stash = (
-        content_type   => 'text/html',
-        headers        => [],
-        @args,
-    );
+        $class->define_subs_for_under_0_52x;
 
-    if ($stash->{use_utf8}) {
-        eval { require 5.008001 };
+        my $self;
+        tie %$self, 'Waft::Class';
+        bless $self, $class;
 
-        if ($EVAL_ERROR) {
-            carp "use_utf8; $EVAL_ERROR";
+        my ($option_hashref, @return_values);
+
+        if (ref $args[0] eq 'HASH') {
+            ($option_hashref, @return_values) = @args;
         }
+        else {
+            $option_hashref = { @args };
+        }
+
+        $option_hashref->{content_type} ||= $self->get_default_content_type;
+        $option_hashref->{headers} ||= [];
+
+        my $stash = $self->stash;
+
+        %$stash = %$option_hashref;
+
+        if ($stash->{use_utf8}) {
+            $self->can_use_utf8; # carp in this method if cannot 'use utf8'
+        }
+
+        return wantarray ? ($self, @return_values) : $self;
     }
 
-    return wantarray ? ($self, @porter) : $self;
+    return $self;
 }
 
-# simulate Class::Std::Utils::ident
-sub ident {
-    my ($obj) = @_;
-
-    my $blessed_class = ref $obj;
-
-    bless $obj;
-    croak 'invalid argument' if "$obj" !~ / 0x(\w+) /x;
-    my $id = hex $1;
-
-    bless $obj, $blessed_class;
-
-    return $id;
-}
-
-my %Stash;
-
-sub stash {
-    my ($self, $package) = @_;
-    return $Stash{ident $self}{$package || caller} ||= {};
-}
-
-sub DESTROY {
+sub initialize {
     my ($self) = @_;
-    delete $Stash{ident $self};
+
+    $self->init_base_url;
+    $self->init_page;
+    $self->init_values;
+    $self->init_action;
+    $self->init_response_headers;
+    $self->init_binmode;
+
+    return $self;
+}
+
+sub init_base_url {
+    my ($self) = @_;
+
+    my $base_url = $self->make_base_url;
+    $self->set_base_url($base_url);
+
     return;
 }
 
-sub _get_url () {
+sub make_base_url {
+
     my $updir = $ENV{PATH_INFO} || q{};
-    my $updirs = $updir =~ s{ /[^/]* }{../}gx;
+    my $updir_count = $updir =~ s{ /[^/]* }{../}gx;
 
     my $url;
 
-    if (defined $ENV{REQUEST_URI} and $ENV{REQUEST_URI} =~ /\A ([^?]+) /x) {
+    if ( defined $ENV{REQUEST_URI}
+         and $ENV{REQUEST_URI} =~ /\A ([^?]+) /xms
+    ) {
         $url = $1;
 
-        for (my $i = 0; $i < $updirs; ++$i) {
+        for (1 .. $updir_count) {
             $url =~ s{ /[^/]* \z}{}x;
         }
     }
@@ -127,631 +274,917 @@ sub _get_url () {
                || eval q{ use FindBin qw( $Script ); $Script };
     }
 
-    return $url =~ m{ ([^/]+) \z}x ? "$updir$1" : './';
+    my $base_url =   $url =~ m{ ([^/]+) \z}xms ? "$updir$1"
+                   :                             './';
+
+    return $base_url;
 }
 
-sub _load_query_param {
+sub set_base_url {
+    my ($self, $base_url) = @_;
+
+    if ($self->BCV < 0.53) {
+        $self->stash->{url} = $base_url;
+    }
+
+    $self->stash->{base_url} = $base_url;
+
+    return;
+}
+
+{
+    my %Stashes;
+
+    sub stash {
+        my ($self, $class) = @_;
+
+        my $ident = $self->ident;
+        $class ||= caller;
+
+        my $stash_hashref = ( $Stashes{$ident}{$class} ||= {} );
+
+        return $stash_hashref;
+    }
+
+    sub DESTROY {
+        my ($self) = @_;
+
+        my $ident = $self->ident;
+        delete $Stashes{$ident};
+
+        return;
+    }
+}
+
+sub ident {
     my ($self) = @_;
 
-    my $stash = $self->stash;
-    my $page = $self->query->param('s');
-    my $submitted;
+    my $blessed_class = ref $self;
 
-    if (defined $page) {
-        $submitted = 1;
-    }
-    else {
-        $page = $self->query->param('p');
-    }
+    bless $self, __PACKAGE__;
+    my $ident = "$self";
 
-    if (defined $page) {
-        if ( File::Spec->file_name_is_absolute($page)
-             or $page =~ m{ [/\\]{2,} }x
-             or $page =~ m{ (?<! [^/\\] ) \.\.? (?! [^/\\] ) }x
-             or $page =~ m{ :: }x
-             or $page eq 'CURRENT'
-             or $page eq 'TEMPLATE'
-             or $self->page_id($page) =~ / __indirect \z/x
-        ) {
-            warn qq{invalid requested page "$page"};
-            $page = 'default.html';
+    bless $self, $blessed_class;
+
+    return $ident;
+}
+
+sub init_page {
+    my ($self) = @_;
+
+    my $page =   $self->is_submitted ? $self->cgi->param('s')
+               :                       $self->cgi->param('p');
+
+    $page = $self->fix_and_validate_page($page);
+    $self->set_page( defined $page ? $page : 'default.html' );
+
+    return;
+}
+
+sub is_submitted {
+    my ($self) = @_;
+
+    my $is_submitted = defined $self->cgi->param('s');
+
+    return $is_submitted;
+}
+
+sub cgi {
+    my ($self) = @_;
+
+    my $query = ( $self->stash->{query} ||= $self->create_query_obj );
+
+    return $query;
+}
+
+sub create_query_obj {
+    my ($self) = @_;
+
+    my $query = CGI->new;
+
+    if ($self->get_using_utf8) {
+        eval qq{\n# line } . __LINE__ . q{ "} . __FILE__ . qq{"\n} . q{
+            use CGI 3.21 qw( -utf8 ); # -utf8 pragma is for 3.31 or later
+        };
+
+        if ($EVAL_ERROR) {
+            $self->carp($EVAL_ERROR);
         }
-
-        $stash->{page} = $page;
-    }
-    else {
-        $stash->{page} = 'default.html';
-    }
-
-    if ($submitted) {
-        my $page_id = $self->page_id;
-        my $global_action;
-
-        PARAM:
-        for my $param_name ($self->query->param) {
-            my $action_id = ( $param_name =~ / ([^.]*) /x )[0];
-
-            next PARAM if    $action_id =~ /(?: \A | _ ) direct   \z/x
-                          or $action_id =~ /(?: \A | _ ) indirect \z/x
-                          or $action_id =~ /\A global_ /x
-                          ;
-
-            if ( $self->can("__${page_id}__$action_id") ) {
-                $stash->{action} = $param_name;
-                last PARAM;
-            }
-
-            next PARAM if defined $global_action;
-
-            if ( $self->can("global_$action_id") ) {
-                $global_action = "global_$param_name";
-            }
-        }
-
-        if (not defined $stash->{action}) {
-            if (defined $global_action) {
-                $stash->{action} = $global_action;
-            }
-            elsif ( $self->can("__${page_id}__submit") ) {
-                $stash->{action} = 'submit';
-            }
-            elsif ( $self->can('global_submit') ) {
-                $stash->{action} = 'global_submit';
-            }
-            else {
-                warn 'requested parameters do not match with defined action';
-                $stash->{action} = 'direct';
-            }
+        elsif ($query->VERSION < 3.31) {
+            $query->charset('utf-8');
         }
     }
-    else {
-        $stash->{action} = 'direct';
-    }
 
-    if ( defined( my $joined_values = $self->query->param('v') ) ) {
-        my @key_values_pairs = split /\x20/, $joined_values, -1;
+    return $query;
+}
 
-        for my $key_values_pair (@key_values_pairs) {
-            my ($key, @values) = split /-/, $key_values_pair, -1;
+sub fix_and_validate_page {
+    my ($self, $page) = @_;
 
-            $self->set_values(
-                _unescape($key) => map { _unescape($_) } @values
-            );
+    return if not defined $page;
+
+    $page =~ m{\A
+        (?! .* [/\\]{2,} )
+        (?! .* (?<! [^/\\] ) \.\.? (?! [^/\\] ) )
+        (?! .* :: )
+        (.+) \z}xms;
+    my $untainted_page = $1;
+
+    return $untainted_page
+        if defined $untainted_page
+           and not File::Spec->file_name_is_absolute($untainted_page)
+           and not $untainted_page eq 'CURRENT'
+           and not $untainted_page eq 'TEMPLATE'
+           and not $self->to_page_id($untainted_page) =~ / __indirect \z/xms;
+
+    $self->carp(qq{Invalid requested page "$page"});
+
+    return;
+}
+
+sub to_page_id {
+    my ($self, $page) = @_;
+
+    my $page_id = $page;
+    $page_id =~ s{ \.[^/:\\]* \z}{}xmx;
+    $page_id =~ tr/0-9A-Za-z_/_/c;
+
+    return $page_id;
+}
+
+sub set_page {
+    my ($self, $page) = @_;
+
+    $self->stash->{page} = $page;
+
+    return;
+}
+
+sub init_values {
+    my ($self, $joined_values) = @_;
+
+    $self->clear_values;
+
+    $joined_values ||= $self->cgi->param('v');
+
+    return if not defined $joined_values;
+
+    my @key_values_pairs = split /\x20/, $joined_values, -1;
+
+    KEY_VALUES_PAIR:
+    for my $key_values_pair (@key_values_pairs) {
+        my ($key, @values) = split /-/, $key_values_pair, -1;
+
+        $key = $self->unescape_space_percent_hyphen($key);
+        @values = $self->unescape_space_percent_hyphen(@values);
+
+        if ($key eq 'ALL_VALUES') {
+            $self->carp(q{Invalid init value 'ALL_VALUES'});
+
+            next KEY_VALUES_PAIR;
         }
+
+        $self->set_values( $key => @values );
     }
 
     return;
 }
 
-sub query {
+sub clear_values {
     my ($self) = @_;
 
-    my $stash = $self->stash;
+    %{ $self->value_hashref } = ();
 
-    return $stash->{query} if $stash->{query};
-
-    require CGI;
-    $stash->{query} = CGI->new;
-
-    if ($stash->{use_utf8}) {
-        eval qq{\n# line } . __LINE__ . q{ "} . __FILE__ . qq{"\n} . q{
-            use CGI 3.21 qw( -utf8 ); # -utf8 pragma is for 3.31 or more
-        };
-
-        if ($EVAL_ERROR) {
-            warn "use_utf8; $EVAL_ERROR";
-        }
-        elsif (CGI->VERSION < 3.31) {
-            $stash->{query}->charset('utf-8');
-        }
-    }
-
-    return $stash->{query};
+    return;
 }
 
-sub page_id {
-    my ($self, $page) = @_;
+sub value_hashref {
+    my ($self) = @_;
 
-    if (not defined $page) {
-        $page = $self->stash->{page};
-    }
-
-    $page =~ s{ \.[^/:\\]* \z}{}x;
-    $page =~ tr/0-9A-Za-z_/_/c;
-
-    return $page;
+    return tied %$self;
 }
 
-sub _unescape ($) {
-    my ($string) = @_;
-    $string =~ s/ %(2[05d]) / pack 'H2', $1 /egx;
-    return $string;
+sub unescape_space_percent_hyphen {
+    my ($self, @values) = @_;
+
+    for my $value (@values) {
+        $value =~ s/ %(2[05d]) / pack 'H2', $1 /egxms;
+    }
+
+    return wantarray ? @values : $values[0];
 }
 
 sub set_values {
     my ($self, $key, @values) = @_;
-    @{ $self->Waft::_value->{$key} } = @values;
+
+    @{ $self->value_hashref->{$key} } = @values;
+
     return;
 }
 
-sub _value {
+sub init_action {
     my ($self) = @_;
-    return tied %$self;
-}
 
-sub set_value {
-    my ($self, $key, $value) = @_;
-    $self->set_values($key, $value);
-    return;
-}
-
-sub begin {
-    my ($self, @args) = @_;
-    return 'CURRENT', @args;
-}
-
-sub _call_method {
-    my ($self, $method_coderef, @porter) = @_;
-
-    my $stash = $self->stash;
-
-    @porter = $self->$method_coderef(@porter);
-    return @porter if $stash->{output};
-
-    my $page = shift @porter;
-    my $action;
-
-    if (ref $page eq 'ARRAY') {
-        ($page, $action) = @$page;
-    }
-
-    my $method = B::svref_2object($method_coderef)->GV->NAME;
-    my $begin_or_before = $method eq 'begin' || $method eq 'before';
-
-    if (not defined $page) {
-        $page = $begin_or_before ? 'CURRENT' : 'TEMPLATE';
-    }
-
-    return $self->Waft::_call_template(@porter) if $page eq 'TEMPLATE';
-
-    if (defined $action) {
-        $stash->{action} = $action;
-    }
-    elsif ( not ($begin_or_before and $page eq 'CURRENT') ) {
-        $stash->{action} = 'indirect';
-    }
-
-    if ($page ne 'CURRENT') {
-        $stash->{page} = $page;
-    }
-
-    return @porter;
-}
-
-sub _call_template {
-    my ($self, @porter) = @_;
-
-    my $stash = $self->stash;
-    my $page = 'TEMPLATE';
-    my $action;
-
-    my $loop_count;
-    TEMPLATE:
-    while ($page eq 'TEMPLATE') {
-        die 'deep recursion when template processing' if ++$loop_count > 4;
-
-        @porter = $self->Waft::_call_template_($stash->{page}, @porter);
-        return @porter if $stash->{output};
-
-        $page = shift @porter;
-
-        if (ref $page eq 'ARRAY') {
-            ($page, $action) = @$page;
-        }
-
-        die 'no content' if not defined $page;
-    }
-
-    $stash->{action} = defined $action ? $action : 'indirect';
-
-    if ($page ne 'CURRENT') {
-        $stash->{page} = $page;
-    }
-
-    return @porter;
-}
-
-sub _call_template_ {
-    my ($self, $page, @args) = @_;
-
-    my @return_values;
-
-    my $template_coderef = $self->Waft::_compile_template_file($page);
-    die $template_coderef if ref $template_coderef ne 'CODE';
-
-    return $self->$template_coderef(@args);
-}
-
-sub _convert ($$) {
-    my ($template_ref, $package) = @_;
-
-    my $break =   $$template_ref =~ /( \x0d\x0a | [\x0a\x0d] )/x ? $1
-                :                                                  "\n";
-
-    my $convert_text_part = sub ($) {
-        my ($text_part) = @_;
-
-        my $code;
-
-        if ($text_part
-                =~ / ([^\x0a\x0d]*) ( (?: \x0d\x0a | [\x0a\x0d] ) .* ) /xs
-        ) {
-            my ($first_line, $after_first_break) = ($1, $2);
-
-            if (length $first_line) {
-                $first_line =~ s/(['\\])/\\$1/g;
-                $code .= qq{\$Waft::self->output('$first_line');};
-            }
-
-            $after_first_break =~ s/(["\$\@\\])/\\$1/g;
-
-            my $breaks = $break x (
-                  $after_first_break =~ s/\x0d\x0a/\\x0d\\x0a/g
-                + $after_first_break =~ s/\x0a/\\x0a/g
-                + $after_first_break =~ s/\x0d/\\x0d/g
-                - 1
-            );
-
-            $code .=   $break
-                     . qq{\$Waft::self->output("$after_first_break");$breaks};
-        }
-        else {
-            $text_part =~ s/(['\\])/\\$1/g;
-            $code = qq{\$Waft::self->output('$text_part');};
-        }
-
-        return $code;
-    };
-
-    $$template_ref = "%>$$template_ref<%";
-
-    $$template_ref =~ s{ (?<= %> ) (?! <% ) (.+?) (?= <% ) }
-                       { $convert_text_part->($1) }egxs;
-
-    $$template_ref
-        =~ s{<%(?!\s*[\x0a\x0d]=[A-Za-z])\s*t(?:ext)?\s*=(.*?)%>}
-            {\$Waft::self->output(\$Waft::self->text_filter($1));}gs;
-
-    $$template_ref
-        =~ s{<%(?!\s*[\x0a\x0d]=[A-Za-z])\s*(?:w(?:ord)?\s*)?=(.*?)%>}
-            {\$Waft::self->output(\$Waft::self->word_filter($1));}gs;
-
-    $$template_ref
-        =~ s{%>|<%}
-            {}g;
-
-    $$template_ref = $break
-                     . "package $package;"
-                     . 'my $response = sub {'
-                     .     'local $Waft::self = $_[0];'
-                     .     $$template_ref . $break
-                     . "};$break"
-                     ;
+    my $action = $self->find_first_action;
+    $self->set_action( defined $action ? $action : 'direct' );
 
     return;
 }
 
-sub _search_template_file {
-    my ($self, $page) = @_;
+sub find_first_action {
+    my ($self) = @_;
 
-    my $template_file_path_cache
-        = $self->stash->{template_file_path_cache} ||= {};
+    return if not $self->is_submitted;
 
-    return @{ $template_file_path_cache->{$page} }
-        if $template_file_path_cache->{$page};
+    my $page_id = $self->to_page_id($self->get_page);
+    my $global_action;
 
-    return @{ $template_file_path_cache->{$page} }
-           = $self->Waft::_search_template_file_($page);
+    my @param_names = $self->cgi->param;
+    PARAM_NAME:
+    for my $param_name ( @param_names ) {
+        my $action_id = $self->to_action_id($param_name);
+
+        if ($self->BCV < 0.53) {
+            next PARAM_NAME if $action_id =~ /\A global_ /xms;
+        }
+
+        next PARAM_NAME if    $action_id =~ /(?: \A | _ ) direct   \z/xms
+                           or $action_id =~ /(?: \A | _ ) indirect \z/xms
+                           or $action_id =~ /\A global__ /xms;
+
+        return $param_name if $self->can("__${page_id}__$action_id");
+
+        next PARAM_NAME if defined $global_action;
+
+        if ($self->BCV < 0.53) {
+            if ( $self->can("global_$action_id") ) {
+                $global_action = "global_$param_name";
+            }
+
+            next PARAM_NAME;
+        }
+
+        if ( $self->can("global__$action_id") ) {
+            $global_action = "global__$param_name";
+        }
+
+        next PARAM_NAME;
+    }
+
+    return $global_action if defined $global_action;
+
+    return 'submit' if $self->can("__${page_id}__submit");
+
+    if ($self->BCV < 0.53) {
+        return 'global_submit' if $self->can('global_submit');
+    }
+
+    return 'global__submit' if $self->can('global__submit');
+
+    $self->carp('Requested parameters do not match with defined action');
+
+    return;
 }
 
-sub _search_template_file_ {
-    my $self = $_[0];
-    my $page = $_[1];
+sub get_page {
+    my ($self) = @_;
 
-    my $stash = $self->stash;
+    return $self->stash->{page};
+}
 
-    if (File::Spec->file_name_is_absolute($page)) {
-        if (-f $page) {
-            return $page, ref $self;
-        }
-        else {
-            warn qq{template file "$page" is not found};
-            return;
-        }
+sub page { $_[0]->get_page(@_[1 .. $#_]) }
+
+sub to_action_id {
+    my ($self, $action) = @_;
+
+    my $action_id = $action;
+    $action_id =~ s/ \. .* \z//xms;
+
+    return $action_id;
+}
+
+sub set_action {
+    my ($self, $action) = @_;
+
+    $self->stash->{action} = $action;
+
+    return;
+}
+
+sub init_binmode {
+    my ($self) = @_;
+
+    if ( $self->get_using_utf8 ) {
+        no strict 'refs';
+        eval q{ binmode select, ':utf8' };
+    }
+    else {
+        no strict 'refs';
+        binmode select;
     }
 
-    if (defined $stash->{template_dir}) {
-        my $path = File::Spec->catdir($stash->{template_dir}, $page);
+    return;
+}
 
-        if (-f $path) {
-            return $path, ref $self;
-        }
-        else {
-            warn qq{template file "$path" is not found};
-            return;
-        }
-    }
+sub init_response_headers {
+    my ($self) = @_;
 
+    $self->set_response_headers( () );
 
+    return;
+}
 
+sub set_response_headers {
+    my ($self, @response_headers) = @_;
 
-    my ($search, %seen, $_get_lib_dir);
-
-    $search = sub ($) {
-        my ($class) = @_;
-        return if $seen{$class}++;
-
-        my $file = $class;
-        $file =~ s{::}{/}g;
-        $file .= ".template/$page";
-
-        for my $lib_dir ( $_get_lib_dir->($class) ) {
-            my $file = "$lib_dir/$file";
-            return $file, $class if -f $file;
-        }
-
-        my @super_classes = do { no strict 'refs'; @{ "${class}::ISA" } };
-        for my $super_class (@super_classes) {
-            if ( my ($file, $class) = $search->($super_class) ) {
-                return $file, $class;
-            }
-        }
+    if ($self->BCV < 0.53) {
+        $self->stash->{headers} = \@response_headers;
 
         return;
-    };
-
-    $_get_lib_dir = sub ($) {
-        my ($class) = @_;
-
-        my $class_file = $class;
-        $class_file =~ s{::}{/}g;
-        $class_file .= '.pm';
-
-        return @INC if not defined $INC{$class_file};
-        return @INC if $INC{$class_file} !~ m{\A (.+) /\Q$class_file\E \z}x;
-        return $1;
-    };
-
-    if ( my ($path, $class) = $search->(ref $self) ) {
-        return $path, $class;
     }
 
+    $self->stash->{response_headers} = \@response_headers;
 
-
-
-    warn qq{template file "$page" is not found};
     return;
 }
 
-my %RESPONSE_CACHE;
-sub _compile_template_file ($$) {
-    my $self = $_[0];
-    my $file = $_[1];
+sub controller {
+    my ($self, @relays) = @_;
 
-    my ($path, $package) = _search_template_file($self, $file)
-        or return 'Not Found';
+    my $stash = $self->stash;
 
-    my @stat = stat $path
-        or do {
-            warn qq{failed to stat template file "$path"};
-            return -f $path ? 'Forbidden' : 'Not Found';
-        };
+    if ( my $coderef = $self->can('begin') ) {
+        @relays = $self->call_method($coderef, @relays);
+    }
 
-    my $datetime
-        = do {
-            my @localtime = localtime $stat[9];
+    my $call_count = 0;
+    METHOD:
+    while ( not $stash->{output} ) {
+        if ( my $coderef = $self->can('before') ) {
+            @relays = $self->call_method($coderef, @relays);
 
-            sprintf '%d%02d%02d%02d%02d%02d' => ($localtime[5] + 1900,
-                                                 $localtime[4] + 1,
-                                                 @localtime[3, 2, 1, 0]);
-        };
+            last METHOD if $stash->{output};
+        }
 
-    my $response_name = "${package}::$file";
+        if ( my $coderef = $self->find_action_method ) {
+            @relays = $self->call_method($coderef, @relays);
 
-    my $response_id = "$response_name-$datetime";
+            last METHOD if $stash->{output};
 
-    # return
-    $RESPONSE_CACHE{$response_id}
-    or do {
-        my $delete_old_cache = sub {
-            my $response_id_regexp = qr/\A\Q$response_name\E-\d{14}\z/;
+            if ($self->BCV < 0.53) {
+                if ( $self->to_action_id($self->get_action) eq 'template' ) {
+                    @relays = $self->call_template('CURRENT', @relays);
 
-            for (keys %RESPONSE_CACHE) {
-                if (/$response_id_regexp/) {
-                    $Waft::Debug and debug_log(qq{delete "$_"});
-                    delete $RESPONSE_CACHE{$_};
+                    last METHOD if $stash->{output};
                 }
             }
 
-            # return;
-        };
-
-        my $read_template_file = sub {
-            sysopen((my $sym = gensym), $path, O_RDONLY)
-                or do {
-                    warn qq{failed to open template file "$path"};
-                    return -f $path ? 'Forbidden' : 'Not Found';
-                };
-
-            binmode $sym;
-
-            read($sym, my $template, $stat[7]) == $stat[7]
-                or do {
-                    warn qq{failed to read template file "$path"};
-                    return 'Internal Error';
-                };
-
-            close $sym
-                or do {
-                    warn qq{failed to close template file "$path"};
-                    return 'Internal Error';
-                };
-
-my $auto_output_waft_tags = sub ($) {
-    my ($code) = @_;
-
-    return $code if $code =~ m{ \b (?:   output_waft_tags
-                                       | (?: (?i) waft(?: \s+ | _ )tag s? )
-                                       | form_elements            # deprecated
-                                   ) \b }x;
-
-    $code =~ s{(?<= "> )}
-              {<% Waft::_auto_output_waft_tags(\$Waft::self); %>}x;
-
-    return $code;
-};
-
-$template =~ s{ (?<= <form \b ) (.+?) (?= </form> ) }
-              { $auto_output_waft_tags->($1) }egixs;
-
-            # return
-            \$template;
-        };
-
-        my $stash = $self->{stash};
-
-        if (defined $stash->{temporary_dir}) {
-            (my $temporary_name = $response_name) =~ s|(?<!:)::(?!:)|-|g;
-                $temporary_name                   =~ s|[/:\\]|-|g;
-
-            my $temporary = File::Spec->catdir(
-                                $stash->{temporary_dir},
-                                $temporary_name
-                            )
-                            . "-$datetime.pl";
-
-            # return
-            $Waft::Debug and debug_log(qq{require "$temporary"});
-            $RESPONSE_CACHE{$response_id} = eval "require '$temporary'"
-                                            || do {
-                $Waft::Debug and debug_log(qq{failure "$temporary"});
-
-                &$delete_old_cache;
-
-                my $sym = gensym;
-
-                if (opendir $sym, $stash->{temporary_dir}) {
-                    my $temporary_file_regexp
-                        = qr/\A\Q$temporary_name\E-\d{14}\.pl\z/;
-
-                    while (defined (my $file = readdir $sym)) {
-                        next if $file !~ /$temporary_file_regexp/;
-
-                        my $path = File::Spec->catdir(
-                            $stash->{temporary_dir}, $file
-                        );
-
-                        $Waft::Debug and debug_log(qq{unlink "$path"});
-                        unlink $path
-                            or warn(
-                               qq{failed to delete old temporary file "$path"}
-                            );
-                    }
-
-                    closedir $sym
-                      or warn(
-                       qq{failed to close directory "$stash->{temporary_dir}"}
-                      );
-                }
-                else {
-                    warn(
-                        qq{failed to open directory "$stash->{temporary_dir}"}
-                    );
-                }
-
-                my $template_ref = &$read_template_file;
-                return $template_ref if ref $template_ref ne 'SCALAR';
-
-                _convert($template_ref, $package);
-
-                sysopen $sym, $temporary, O_CREAT | O_EXCL | O_WRONLY, 0400
-                    or do {
-                        warn(
-                            qq{failed to create temporary file "$temporary"}
-                        );
-
-                        return 'Internal Error';
-                    };
-
-                binmode $sym;
-
-                local $, = q{};
-                print $sym qq{# line 1 "$file"}, $$template_ref
-                    or do {
-                        warn(
-                            qq{failed to write to temporary file "$temporary"}
-                        );
-
-                        return 'Internal Error';
-                    };
-
-                close $sym
-                    or do {
-                        warn(
-                            qq{failed to close temporary file "$temporary"}
-                        );
-
-                        return 'Internal Error';
-                    };
-
-                # return
-                $Waft::Debug and debug_log(qq{convert "${package}::$file"});
-                eval qq{\n# line } . __LINE__ . q{ "} . __FILE__
-                     . qq{"\nrequire '$temporary';}
-                or do {
-                    warn $@;
-
-                    unlink $temporary
-                        or warn(
-                            qq{failed to delete temporary file "$temporary"}
-                        );
-
-                    return 'Internal Error';
-                };
-            };
+            next METHOD;
         }
         else {
-            &$delete_old_cache;
+            $self->set_action('template');
+        }
 
-            my $template_ref = &$read_template_file;
-            return $template_ref if ref($template_ref) ne 'SCALAR';
+        @relays = $self->call_template('CURRENT', @relays);
 
-            _convert($template_ref, $package);
+        last METHOD if $stash->{output};
+    }
+    continue {
+        $self->croak('Deep recursion on controller') if ++$call_count > 4;
+    }
 
-            if ($stash->{use_utf8}) {
-                utf8::encode($file);
+    if ( $self->can('end') ) {
+        my @return_values = $self->end(@relays);
+
+        if ( @return_values ) {
+            @relays = @return_values;
+        }
+    }
+
+    return wantarray ? @relays : $relays[0];
+}
+
+sub call_method {
+    my ($self, $method_coderef, @args) = @_;
+
+    my @return_values = $self->$method_coderef(@args);
+
+    return wantarray ? @return_values : $return_values[0]
+        if $self->stash->{output};
+
+    require B;
+    my $method_name = B::svref_2object($method_coderef)->GV->NAME;
+
+    if ( $method_name eq 'begin' || $method_name eq 'before'
+         and @return_values == 0
+    ) {
+        my $next = { page => 'CURRENT', action => undef };
+        @return_values = ($next, @args);
+    }
+
+    my $next = shift @return_values;
+    my ($next_page, $next_action)
+        =   ref $next eq 'ARRAY' ? @$next
+          : ref $next eq 'HASH'  ? ($next->{page}, $next->{action})
+          :                        ($next, undef);
+
+    if ( not defined $next_page ) {
+        $next_page =   $method_name eq 'begin'  ? 'CURRENT'
+                     : $method_name eq 'before' ? 'CURRENT'
+                     :                            'TEMPLATE';
+    }
+
+    if ( not defined $next_action ) {
+        $next_action =   $next_page eq 'TEMPLATE' ? 'template'
+                       :                            'indirect';
+    }
+
+    if ($next_page eq 'CURRENT' or $next_page eq 'TEMPLATE') {
+        # don't change page
+    }
+    else {
+        $self->set_page($next_page);
+    }
+
+    if ( $next_page eq 'CURRENT'
+         and $method_name eq 'begin' || $method_name eq 'before'
+    ) {
+        # don't change action
+    }
+    else {
+        $self->set_action($next_action);
+    }
+
+    return @return_values;
+}
+
+sub find_action_method {
+    my ($self) = @_;
+
+    my $page_id = $self->to_page_id($self->get_page);
+    my $action_id = $self->to_action_id($self->get_action);
+
+    if ($self->BCV < 0.53) {
+        if ($action_id eq 'direct') {
+            return    $self->can("__${page_id}__direct")
+                   || $self->can("__${page_id}")
+                   || $self->can('global_direct');
+        }
+        elsif ($action_id eq 'indirect') {
+            return    $self->can("__${page_id}__indirect")
+                   || $self->can("__${page_id}")
+                   || $self->can('global_indirect');
+        }
+        elsif ( $action_id =~ /\A global_ /xms ) {
+            return $self->can($action_id);
+        }
+    }
+
+    if ($action_id eq 'direct') {
+        return    $self->can("__${page_id}__direct")
+               || $self->can("__${page_id}")
+               || $self->can('global__direct');
+    }
+    elsif ($action_id eq 'indirect') {
+        return    $self->can("__${page_id}__indirect")
+               || $self->can("__${page_id}")
+               || $self->can('global__indirect');
+    }
+    elsif ( $action_id =~ /\A global__ /xms ) {
+        return $self->can($action_id);
+    }
+
+    return $self->can("__${page_id}__$action_id");
+}
+
+sub get_action {
+    my ($self) = @_;
+
+    return $self->stash->{action};
+}
+
+sub action { $_[0]->get_action(@_[1 .. $#_]) }
+
+sub call_template {
+    my ($self, $page, @args) = @_;
+
+    if ($self->BCV < 0.53) {
+        $page =~ s/ .+ :: //xms;
+    }
+
+    if ($page eq 'CURRENT' or $page eq 'TEMPLATE') {
+        $page = $self->get_page;
+    }
+
+    my ($template_file, $template_class) = $self->get_template_file($page);
+
+    if ( not defined $template_file ) {
+        $self->carp(qq{Requested page "$page" is not found});
+
+        my $goto_not_found_coderef = sub {
+            my ($self, @args) = @_;
+
+            return 'not_found.html', @args;
+        };
+
+        return $self->call_method($goto_not_found_coderef, @args);
+    }
+
+    my $template_coderef
+        = $self->compile_template_file($template_file, $template_class);
+
+    return $self->call_method($template_coderef, @args);
+}
+
+sub get_template_file {
+    my ($self, $page) = @_;
+
+    if ($page eq 'CURRENT' or $page eq 'TEMPLATE') {
+        $page = $self->get_page;
+    }
+
+    if ( File::Spec->file_name_is_absolute($page) ) {
+        return if not -f $page;
+
+        my $template_file = $page;
+        my $template_class = ref $self || $self;
+
+        return $template_file, $template_class;
+    }
+
+    return $self->find_template_file($page);
+}
+
+sub find_template_file {
+    my ($self, $page, $class, $seen) = @_;
+
+    $class ||= ref $self || $self;
+    return if $seen->{$class}++;
+
+    my $class_path = $class;
+    $class_path =~ s{ :: }{/}gxms;
+
+    my $module_file = "$class_path.pm";
+    my @lib_dirs
+         =   ! defined $INC{$module_file}                             ? @INC
+           : $INC{$module_file} =~ m{\A (.+) /\Q$module_file\E \z}xms ? ($1)
+           :                                                            @INC;
+
+    my $finding_file = "$class_path.template/$page";
+    for my $lib_dir ( @lib_dirs ) {
+        my $template_file = "$lib_dir/$finding_file";
+
+        return $template_file, $class if -f $template_file;
+    }
+
+    my @super_classes = do { no strict 'refs'; @{ "${class}::ISA" } };
+
+    for my $super_class ( @super_classes ) {
+        my ($template_file, $template_class)
+            = $self->find_template_file($page, $super_class, $seen);
+
+        return $template_file, $template_class if defined $template_file;
+    }
+
+    return;
+}
+
+{
+    my %Cached_template_coderef;
+
+    sub compile_template_file {
+        my ($self, $template_file, $template_class) = @_;
+
+        my @stat = stat $template_file;
+        if ( not @stat ) {
+            $self->carp(qq{Failed to stat template file "$template_file"});
+
+            my $goto_internal_server_error_coderef = sub {
+                my ($self, @args) = @_;
+
+                return 'internal_server_error.html', @args;
+            };
+
+            return $goto_internal_server_error_coderef;
+        }
+        my $modified_time = $stat[9];
+
+        my $template_name = "${template_class}::$template_file";
+        my $template_id = "$template_name-$modified_time";
+
+        return $Cached_template_coderef{$template_id}
+            if exists $Cached_template_coderef{$template_id};
+
+        my $old_template_id_regexp = qr/\A \Q$template_name\E - \d{14} \z/xms;
+        CACHED_TEMPLATE:
+        for my $cached_template_id ( keys %Cached_template_coderef ) {
+            next CACHED_TEMPLATE
+                if $cached_template_id !~ $old_template_id_regexp;
+            delete $Cached_template_coderef{$cached_template_id};
+        }
+
+        my $template_scalarref = $self->read_template_file($template_file);
+        if ( not $template_scalarref ) {
+            $self->carp(qq{Failed to read template file "$template_file"});
+
+            my $goto_forbidden_coderef = sub {
+                my ($self, @args) = @_;
+
+                return 'forbidden.html', @args;
+            };
+
+            return $goto_forbidden_coderef;
+        }
+
+        my $template_coderef = $self->compile_template(
+            $template_scalarref, $template_file, $template_class
+        );
+
+        $Cached_template_coderef{$template_id} = $template_coderef;
+
+        return $template_coderef;
+    }
+}
+
+sub read_template_file {
+    my ($self, $template_file) = @_;
+
+    sysopen my $file_handle = gensym, $template_file, O_RDONLY
+        or return;
+
+    binmode $file_handle;
+
+    my ($untainted_template) = do { local $/; <$file_handle> =~ / (.*) /xms };
+
+    close $file_handle;
+
+    return \$untainted_template;
+}
+
+sub compile_template {
+    my ($self, $template, $template_file, $template_class) = @_;
+
+    if (ref $template eq 'SCALAR') {
+        $template = $$template;
+    }
+
+    $template =~ s{ (?<= <form \b ) (.+?) (?= </form> ) }
+                  { $self->insert_output_waft_tags_method($1) }egixms;
+
+    $template =~ / ( \x0D\x0A | [\x0A\x0D] ) /xms;
+    my $break = $1 || "\n";
+
+    $template = "%>$template<%";
+
+    $template =~ s{ (?<= %> ) (?! <% ) (.+?) (?= <% ) }
+                  { $self->convert_text_part($1, $break) }egxms;
+
+    $template
+        =~ s{<% (?! \s*[\x0A\x0D]
+                    =[A-Za-z]
+                )
+                \s* t(?:ext)? \s* = (.*?)
+             %>}{\$Waft::Self->output( \$Waft::Self->text_filter($1) );}gxms;
+
+    $template
+        =~ s{<% (?! \s*[\x0A\x0D]
+                    =[A-Za-z]
+                )
+                \s* (?: w(?:ord)? \s* )? = (.*?)
+             %>}{\$Waft::Self->output( \$Waft::Self->word_filter($1) );}gxms;
+
+    $template =~ s/ %> | <% //gxms;
+
+    $template = 'return sub {'
+                .     'local $Waft::Self = $_[0];'
+                .     $template
+                . '}';
+
+    if ( defined $template_class ) {
+        $template = "package $template_class;" . $template;
+    }
+
+    if ( defined $template_file ) {
+        $template = qq{# line 1 "$template_file"$break} . $template;
+    }
+
+    my $coderef = $self->compile(\$template);
+
+    $self->croak($EVAL_ERROR) if $EVAL_ERROR;
+
+    return $coderef;
+}
+
+sub insert_output_waft_tags_method {
+    my ($self, $form_block) = @_;
+
+    return $form_block if $form_block =~ m{ \b (?:
+          output_waft_tags
+        | (?: (?i) waft(?: \s+ | _ ) tag s? )
+        | form_elements                       # deprecated
+    ) \b }xms;
+
+    $form_block =~ s{ (?= < (?: input | select | textarea ) \b ) }
+                    {<% \$Waft::Self->output_waft_tags('ALL_VALUES'); %>}ixms;
+
+    return $form_block;
+}
+
+sub output_waft_tags {
+    my ($self, @keys_arrayref_or_key_value_pairs) = @_;
+
+    $self->output( $self->get_waft_tags(@keys_arrayref_or_key_value_pairs) );
+
+    return;
+}
+
+sub get_waft_tags {
+    my ($self, @keys_arrayref_or_key_value_pairs) = @_;
+
+    my $joined_values = $self->join_values(@keys_arrayref_or_key_value_pairs);
+    my $waft_tags = q{<input name="s" type="hidden" value="}
+                    . $self->html_escape($self->get_page)
+                    . q{" /><input name="v" type="hidden" value="}
+                    . $self->html_escape($joined_values)
+                    . q{" />};
+
+    return $waft_tags;
+}
+
+sub join_values {
+    my ($self, @keys_arrayref_or_key_value_pairs) = @_;
+
+    my %joined_values;
+
+    KEYS_ARRAYREF_OR_KEY:
+    while ( @keys_arrayref_or_key_value_pairs ) {
+        my $keys_arrayref_or_key = shift @keys_arrayref_or_key_value_pairs;
+
+        if ( defined $keys_arrayref_or_key
+             and $keys_arrayref_or_key eq 'ALL_VALUES'
+        ) {
+            $keys_arrayref_or_key = $self->keys_arrayref;
+        }
+
+        if (ref $keys_arrayref_or_key eq 'ARRAY') {
+            KEY:
+            for my $key ( @$keys_arrayref_or_key ) {
+                if ( not defined $key ) {
+                    $self->carp('Use of uninitialized value');
+                    $key = q{};
+                }
+
+                next KEY if not $self->exists_key($key);
+
+                my @values = $self->get_values($key);
+
+                VALUE:
+                for my $value ( @values ) {
+                    next VALUE if defined $value;
+                    $self->carp('Use of uninitialized value');
+                    $value = q{};
+                }
+
+                @values = $self->escape_space_percent_hyphen(@values);
+
+                $joined_values{$key} = join '-', @values;
             }
 
-            # return
-            $Waft::Debug and debug_log(qq{eval "${package}::$file"});
-            $RESPONSE_CACHE{$response_id}
-                = eval qq{\n# line 1 "$file" $$template_ref}
-                  || do {
-                      warn $@;
-                      return 'Internal Error';
-                  };
+            next KEYS_ARRAYREF_OR_KEY;
         }
+
+        my $key;
+
+        if ( defined $keys_arrayref_or_key ) {
+            $key = $keys_arrayref_or_key;
+        }
+        else {
+            $self->carp('Use of uninitialized value');
+            $key = q{};
+        }
+
+        my @values;
+
+        if ( @keys_arrayref_or_key_value_pairs ) {
+            my $value_or_values_arrayref
+                = shift @keys_arrayref_or_key_value_pairs;
+
+            if ( not defined $value_or_values_arrayref ) {
+                $self->carp('Use of uninitialized value');
+                @values = (q{});
+            }
+            elsif (ref $value_or_values_arrayref eq 'ARRAY') {
+                @values = @$value_or_values_arrayref;
+
+                VALUE:
+                for my $value ( @values ) {
+                    next VALUE if defined $value;
+                    $self->carp('Use of uninitialized value');
+                    $value = q{};
+                }
+            }
+            else {
+                @values = ($value_or_values_arrayref);
+            }
+        }
+        else {
+            $self->carp('Odd number of elements in arguments');
+            @values = (q{});
+        }
+
+        @values = $self->escape_space_percent_hyphen(@values);
+
+        $joined_values{$key} = join '-', @values;
+
+        next KEYS_ARRAYREF_OR_KEY;
+    }
+
+    my $joined_values
+        = join q{ }, map { $self->escape_space_percent_hyphen($_)
+                           . '-' . $joined_values{$_}
+                         } sort keys %joined_values;
+
+    return $joined_values;
+}
+
+sub keys_arrayref {
+    my ($self) = @_;
+
+    return [ keys %{ $self->value_hashref } ];
+}
+
+sub exists_key {
+    my ($self, $key) = @_;
+
+    return exists $self->value_hashref->{$key};
+}
+
+{
+    my @EMPTY;
+
+    sub get_values {
+        my ($self, $key, @i) = @_;
+
+        return @{ $self->value_hashref->{$key} || \@EMPTY }[@i] if @i;
+
+        return @{ $self->value_hashref->{$key} || \@EMPTY };
+    }
+}
+
+sub escape_space_percent_hyphen {
+    my ($self, @values) = @_;
+
+    for my $value (@values) {
+        $value =~ s/ ( [ %-] ) / '%' . unpack('H2', $1) /egxms;
+    }
+
+    return wantarray ? @values : $values[0];
+}
+
+sub convert_text_part {
+    my ($self, $text_part, $break) = @_;
+
+    if ($text_part =~ / ([^\x0A\x0D]*) ( [\x0A\x0D] .* ) /xms) {
+        my ($first_line, $after_first_break) = ($1, $2);
+
+        if (length $first_line > 0) {
+            $first_line =~ s/ ( ['\\] ) /\\$1/gxms;
+            $first_line = q{$Waft::Self->output('} . $first_line . q{');};
+        }
+
+        $after_first_break =~ s/ ( ["\$\@\\] ) /\\$1/gxms;
+
+        my $breaks = $break x (
+              $after_first_break =~ s/ \x0D\x0A /\\x0D\\x0A/gxms
+            + $after_first_break =~ s/ \x0A /\\x0A/gxms
+            + $after_first_break =~ s/ \x0D /\\x0D/gxms
+            - 1
+        );
+
+        return $first_line . $break
+               . qq{\$Waft::Self->output("$after_first_break");$breaks};
+    }
+
+    $text_part =~ s/ ( ['\\] ) /\\$1/gxms;
+
+    return q{$Waft::Self->output('} . $text_part . q{');};
+}
+
+{
+    package Waft::compile;
+
+    sub Waft::compile {
+
+        return eval ${ $_[1] };
     }
 }
 
 sub output {
     my ($self, @strings) = @_;
 
-    my $stash = $self->stash;
-
-    if (not $stash->{output}) {
-        $self->Waft::_respond_headers;
-        $stash->{output} = 1;
+    if ( not $self->stash->{output} ) {
+        $self->output_response_headers;
+        $self->stash->{output} = 1;
     }
 
     return if not @strings;
@@ -761,147 +1194,41 @@ sub output {
     return;
 }
 
-sub _respond_headers {
-    my ($self, $content_length) = @_;
-
-    my $stash = $self->stash;
-
-    for my $header (@{ $stash->{headers} }) {
-        print "$header\x0d\x0a";
-    }
-
-    if (defined $content_length) {
-        if (not grep /\A Content-Length: /ix, @{ $stash->{headers} }) {
-            print "Content-Length: $content_length\x0d\x0a";
-        }
-    }
-
-    if (not grep /\A Content-Type: /ix, @{ $stash->{headers} }) {
-        print "Content-Type: $stash->{content_type}\x0d\x0a";
-    }
-
-    print "\x0d\x0a";
-}
-
-sub output_waft_tags {
-    my ($self, @args) = @_;
-    $self->output( $self->waft_tags(@args) );
-    return;
-}
-
-sub waft_tags {
-    my ($self, @args) = @_;
-
-    my $stash = $self->stash;
-
-    return '<input name="s" type="hidden" value="'
-           . $self->html_escape($stash->{page})
-           . '" /><input name="v" type="hidden" value="'
-           . $self->html_escape( $self->join_values(@args) )
-           . '" />';
-}
-
-sub _auto_output_waft_tags ($) {
+sub output_response_headers {
     my ($self) = @_;
-    $self->output_waft_tags('ALL_VALUES');
+
+    for my $response_header ( $self->get_response_headers ) {
+        print "$response_header\x0D\x0A";
+    }
+
+    if ($self->BCV < 0.53) {
+        if ( not grep { /\A Content-Type: /ixms
+                      } $self->get_response_headers
+        ) {
+            my $content_type = $self->stash->{content_type};
+            print "Content-Type: $content_type\x0D\x0A";
+        }
+
+        print "\x0D\x0A";
+
+        return;
+    }
+
+    if ( not grep { /\A Content-Type: /ixms } $self->get_response_headers ) {
+        print 'Content-Type: ' . $self->get_default_content_type . "\x0D\x0A";
+    }
+
+    print "\x0D\x0A";
+
     return;
 }
 
-sub html_escape {
-    shift;
-    my @value = @_;
+sub get_response_headers {
+    my ($self) = @_;
 
-    for (@value) {
-        defined or do {
-            carp 'Use of uninitialized value' if $^W;
-            next;
-        };
+    return @{ $self->stash->{headers} } if $self->BCV < 0.53;
 
-        s/&/&amp;/g;
-        s/"/&quot;/g;
-        s/'/&#39;/g;
-        s/</&lt;/g;
-        s/>/&gt;/g;
-    }
-
-    wantarray ? @value : $value[0];
-}
-
-sub join_values {
-    my $value = shift->Waft::_value;
-
-    my @values =   @_ == 1
-                   && defined $_[0]
-                   && $_[0] eq 'ALL_VALUES' ? ([keys %$value])
-                 :                            @_
-                 ;
-
-    my %value;
-
-    while (@values) {
-        my $key = shift @values;
-
-        if (ref $key eq 'ARRAY') {
-            KEY:
-            for my $key (@$key) {
-                if (not defined $key) {
-                    if ($WARNING) {
-                        carp 'Use of uninitialized value';
-                    }
-
-                    $key = q{};
-                }
-
-                next KEY if not exists $value->{$key};
-
-                $value{_escape_key($key)} = _escape_values(
-                    $value->{$key} ? @{ $value->{$key} } : ()
-                );
-            }
-        }
-        elsif (defined $key) {
-            if (not @values and $WARNING) {
-                carp 'Odd number of elements in hash assignment';
-            }
-
-            my $value = shift @values;
-
-            $value{_escape_key($key)}
-                = _escape_values(ref $value eq 'ARRAY' ? @$value : $value);
-        }
-        else {
-            if ($WARNING) {
-                carp 'Use of uninitialized value';
-            }
-        }
-    }
-
-    return join q{ }, map { $_ . $value{$_} } sort keys %value;
-}
-
-sub _escape_key {
-    my ($key) = @_;
-    $key =~ s/([ %-])/'%' . unpack 'H2', $1/eg;
-    return $key;
-}
-
-sub _escape_values {
-    my (@values) = @_;
-
-    for my $value (@values) {
-        if (defined $value) {
-            $value =~ s/([ %-])/'%' . unpack 'H2', $1/eg;
-        }
-        else {
-            if ($WARNING) {
-                carp 'Use of uninitialized value';
-            }
-
-            $value = q{};
-        }
-    }
-
-    return join q{}, map { "-$_" } @values;
+    return @{ $self->stash->{response_headers} }
 }
 
 BEGIN {
@@ -910,281 +1237,358 @@ BEGIN {
 
     # generate simple expand if faild to use Text::Tabs
     if ($EVAL_ERROR) {
-        *expand = sub ($) {
+        *expand = sub {
             my ($value) = @_;
-            $value =~ s/\t/        /g;
+
+            $value =~ s/ \t /        /gxms;
+
             return $value;
         };
     }
 }
 
 sub text_filter {
-    my $self  = shift;
-    my @value = @_;
+    my ($self, @values) = @_;
 
-    for (@value) {
-        defined or do {
-            carp 'Use of uninitialized value' if $^W;
-            next;
-        };
+    VALUE:
+    for my $value ( @values ) {
+        if ( not defined $value ) {
+            $self->carp('Use of uninitialized value');
 
-        $_ = $self->html_escape(expand $_);
-        s{(\s) }{$1&nbsp;}g;
-        s{(\x0d\x0a|[\x0a\x0d])}{<br />$1}g;
+            next VALUE;
+        }
+
+        $value = expand($value);
+        $self->html_escape($value);
+        $value =~ s{ (\s) \x20                 }{$1&nbsp;}gxms;
+        $value =~ s{ ( \x0D\x0A | [\x0A\x0D] ) }{<br />$1}gxms;
     }
 
-    wantarray ? @value : $value[0];
+    return wantarray ? @values : $values[0];
 }
 
-sub url {
-    my $self = shift;
+sub html_escape {
+    my ($self, @values) = @_;
 
-    my ($value, $stash) = ($self->Waft::_value, $self->stash);
+    VALUE:
+    for my $value (@values) {
+        if ( not defined $value ) {
+            $self->carp('Use of uninitialized value');
 
-    if (@_) {
-        my @query_string;
-
-        my $page = shift;
-
-        if (ref $page eq 'ARRAY') {
-            ($page) = @$page;
+            next VALUE;
         }
 
-        if (not defined $page) {
-            $page = 'CURRENT';
-        }
-
-        if ($page eq 'CURRENT') {
-            $page = $stash->{page};
-        }
-
-        if ($page ne 'default.html') {
-            push @query_string,
-                join '=' => $self->url_encode('p', $page);
-        }
-
-        if ( my $joined_value = $self->join_values(@_) ) {
-            push @query_string,
-                join '=' => $self->url_encode(
-                                'v', $joined_value
-                            );
-        }
-
-        # return
-        @query_string
-            ? $stash->{url} . '?' . join '&', @query_string
-            : $stash->{url};
-    }
-    else {
-        $stash->{url};
-    }
-}
-
-sub url_encode {
-    my $use_utf8 = shift->stash->{use_utf8};
-    my @value    = @_;
-
-    for (@value) {
-        defined or do {
-            carp 'Use of uninitialized value' if $^W;
-            next;
-        };
-
-        if ($use_utf8) {
-            utf8::encode($_);
-        }
-
-        s/([^ .\w-])/'%' . unpack 'H2', $1/eg;
-        tr/ /+/;
+        $value =~ s/ & /&amp;/gxms;
+        $value =~ s/ " /&quot;/gxms;
+        $value =~ s/ ' /&#39;/gxms;
+        $value =~ s/ < /&lt;/gxms;
+        $value =~ s/ > /&gt;/gxms;
     }
 
-    wantarray ? @value : $value[0];
+    return wantarray ? @values : $values[0];
 }
 
-sub word_filter {
-    shift->html_escape(@_);
-}
+sub word_filter { $_[0]->html_escape(@_[1 .. $#_]) }
 
-sub include {
-    my ($self, $page, @args) = @_;
-    $page =~ s/.+:://; # deprecated
-    return $self->Waft::_call_template_($page, @args);
-}
+sub page_id {
+    my ($self, $page) = @_;
 
-sub header {
-    my ($self, @header_blocks) = @_;
-
-    my $stash = $self->stash;
-
-    for my $header_block (@header_blocks) {
-        my @header_lines = grep { length } split /[\x0a\x0d]+/, $header_block;
-        push @{ $stash->{headers} }, @header_lines;
+    if ( not defined $page ) {
+        $page = $self->get_page;
     }
+
+    my $page_id = $self->to_page_id($page);
+
+    return $page_id;
+}
+
+sub set_value {
+    my ($self, $key, $value) = @_;
+
+    $self->set_values($key, $value);
 
     return;
-}
-
-sub action {
-    shift->stash->{action};
-}
-
-sub page {
-    shift->stash->{page};
-}
-
-sub _controller {
-    my ($self, @porter) = @_;
-
-    my $stash = $self->stash;
-
-    my $loop_count;
-    CONTROLLER:
-    while (not $stash->{output}) {
-        die 'deep recursion on controller' if ++$loop_count > 4;
-
-        @porter = $self->Waft::_call_method( $self->can('before'), @porter );
-        last CONTROLLER if $stash->{output};
-
-        if (my $action_coderef = $self->Waft::_search_action_method) {
-            @porter = $self->Waft::_call_method($action_coderef, @porter);
-        }
-        else {
-            @porter = $self->Waft::_call_template(@porter);
-        }
-    }
-
-    return @porter;
-}
-
-sub before {
-    my ($self, @args) = @_;
-    return 'CURRENT', @args;
-}
-
-sub _search_action_method {
-    my ($self) = @_;
-
-    my $stash = $self->stash;
-    my $page_id = $self->page_id;
-
-    if ($stash->{action} eq 'indirect') {
-        return    $self->can("__${page_id}__indirect")
-               || $self->can("__${page_id}")
-               || $self->can('global_indirect')
-               ;
-    }
-    elsif ($stash->{action} eq 'direct') {
-        return    $self->can("__${page_id}__direct")
-               || $self->can("__${page_id}")
-               || $self->can('global_direct')
-               ;
-    }
-    elsif ($stash->{action} =~ /\A (global_[^.]*) /x) {
-        return $self->can($1);
-    }
-    elsif ($stash->{action} =~ /\A ([^.]*) /x) {
-        return $self->can("__${page_id}__$1");
-    }
-
-    return;
-}
-
-sub end {
-    my ($self, @args) = @_;
-    return @args;
-}
-
-my @EMPTY;
-sub get_values {
-    my ($self, $key, @i) = @_;
-    return @{ $self->Waft::_value->{$key} || \@EMPTY }[@i] if @i;
-    return @{ $self->Waft::_value->{$key} || \@EMPTY };
 }
 
 sub get_value {
     my ($self, $key, @i) = @_;
+
     return( ( $self->get_values($key, @i) )[0] );
 }
 
-{
-    # deprecated methods
+sub add_response_header {
+    my ($self, $response_header) = @_;
 
-    sub __DEFAULT {
-        my ($self, @args) = @_;
-        return ['default.html', $self->action], @args;
-    }
+    if ($_[0]->BCV < 0.53) {
+        ( undef, my @response_header_blocks ) = @_;
 
-    *add_header = *add_header = \&header;
-
-    sub array {
-        my ($self, $key, @values) = @_;
-
-        if (@values) {
-            my @old_values = $self->get_values($key);
-            $self->set_values($key, @values);
-            return @old_values;
+        my $stash = $self->stash;
+        for my $response_header_block ( @response_header_blocks ) {
+            my @response_header_lines
+                = grep { length > 0
+                       } split /[\x0A\x0D]+/, $response_header_block;
+            push @{ $stash->{headers} }, @response_header_lines;
         }
-
-        return $self->get_values($key);
-    }
-
-    sub arrayref {
-        my ($self, $key, $arrayref) = @_;
-
-        return $self->Waft::_value->{$key} = $arrayref
-            if ref $arrayref eq 'ARRAY';
-
-        return $self->Waft::_value->{$key} ||= [];
-    }
-
-    *call_template = *call_template = \&include;
-
-    sub form_elements {
-        my ($self, @args) = @_;
-
-        if (@args == 1
-            and defined $args[0]
-            and $args[0] eq 'ALL' || $args[0] eq 'ALLVALUES'
-        ) {
-            $args[0] = 'ALL_VALUES';
-        }
-
-        $self->output_waft_tags(@args);
 
         return;
     }
 
-    *_join_values = \&join_values;
+    $response_header =~ s/ [\x0A\x0D]+ //gxms;
+    push @{ $self->stash->{response_headers} }, $response_header;
+
+    return;
 }
 
-package Waft::Object;
+sub add_header { $_[0]->add_response_header(@_[1 .. $#_]) }
+sub header     { $_[0]->add_response_header(@_[1 .. $#_]) }
+
+sub make_url {
+    my ($self, $page, @keys_arrayref_or_key_value_pairs) = @_;
+
+    my $query_string
+        = $self->make_query_string($page, @keys_arrayref_or_key_value_pairs);
+
+    return $self->get_base_url if length $query_string == 0;
+
+    return $self->get_base_url . '?' . $query_string;
+}
+
+sub url { $_[0]->make_url(@_[1 .. $#_]) }
+
+sub make_query_string {
+    my ($self, $page, @keys_arrayref_or_key_value_pairs) = @_;
+
+    if (ref $page eq 'ARRAY') {
+        $page = $page->[0];
+    }
+
+    $page =   ! defined $page    ? 'default.html'
+            : $page eq 'CURRENT' ? $self->get_page
+            :                      $page;
+
+    my @query_string;
+
+    if ($page ne 'default.html') {
+        push @query_string,
+             join( '=', ( $self->url_encode( 'p' => $page ) ) );
+    }
+
+    my $joined_values = $self->join_values(@keys_arrayref_or_key_value_pairs);
+    if ( $joined_values ) {
+        push @query_string,
+             join( '=', ( $self->url_encode('v' => $joined_values) ) );
+    }
+
+    my $query_string = join '&', @query_string;
+
+    return $query_string;
+}
+
+sub url_encode {
+    my ($self, @values) = @_;
+
+    my $using_utf8 = $self->get_using_utf8;
+
+    VALUE:
+    for my $value ( @values ) {
+        if ( not defined $value ) {
+            $self->carp('Use of uninitialized value');
+
+            next VALUE;
+        }
+
+        if ( $using_utf8 ) {
+            utf8::encode($value);
+        }
+
+        $value =~ s/ ( [^ .\w-] ) / '%' . unpack('H2', $1) /egxms;
+        $value =~ tr/ /+/;
+    }
+
+    return wantarray ? @values : $values[0];
+}
+
+sub get_base_url {
+    my ($self) = @_;
+
+    return $Waft::Base_url if defined $Waft::Base_url;
+
+    return $self->stash->{url} if $self->BCV < 0.53;
+
+    return $self->stash->{base_url};
+}
+
+sub __forbidden__indirect {
+    my ($self, @args) = @_;
+
+    $self->add_response_header('Status: 403 Forbidden');
+    $self->add_response_header('Content-Type: text/html; charset=ISO8859-1');
+
+    $self->output(qq{<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">\n});
+    $self->output(qq{<html><head>\n});
+    $self->output(qq{<title>403 Forbidden</title>\n});
+    $self->output(qq{</head><body>\n});
+    $self->output(qq{<h1>Forbidden</h1>\n});
+    $self->output( q{<p>You don't have permission to access this page.});
+    $self->output(qq{</p>\n});
+    $self->output(qq{</body></html>\n});
+
+    return @args;
+}
+
+sub __not_found__indirect {
+    my ($self, @args) = @_;
+
+    $self->add_response_header('Status: 404 Not Found');
+    $self->add_response_header('Content-Type: text/html; charset=ISO8859-1');
+
+    $self->output(qq{<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">\n});
+    $self->output(qq{<html><head>\n});
+    $self->output(qq{<title>404 Not Found</title>\n});
+    $self->output(qq{</head><body>\n});
+    $self->output(qq{<h1>Not Found</h1>\n});
+    $self->output(qq{<p>The requested URL was not found.</p>\n});
+    $self->output(qq{</body></html>\n});
+
+    return @args;
+}
+
+sub __internal_server_error__indirect {
+    my ($self, @args) = @_;
+
+    $self->add_response_header('Status: 500 Internal Server Error');
+    $self->add_response_header('Content-Type: text/html; charset=ISO8859-1');
+
+    $self->output(qq{<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">\n});
+    $self->output(qq{<html><head>\n});
+    $self->output(qq{<title>500 Internal Server Error</title>\n});
+    $self->output(qq{</head><body>\n});
+    $self->output(qq{<h1>Internal Server Error</h1>\n});
+    $self->output(qq{<p>The server encountered an internal error or\n});
+    $self->output(qq{misconfiguration and was unable to complete\n});
+    $self->output(qq{your request.</p>\n});
+    $self->output(qq{<p>Please contact the server administrator\n});
+    $self->output(qq{ and inform them of the time the error occurred,\n});
+    $self->output(qq{and anything you might have done that may have\n});
+    $self->output(qq{caused the error.</p>\n});
+    $self->output( q{<p>More information about this error may be });
+    $self->output(qq{available\n});
+    $self->output(qq{in the server error log.</p>\n});
+    $self->output(qq{</body></html>\n});
+
+    return @args;
+}
+
+sub include { $_[0]->call_template(@_[1 .. $#_]) }
+
+{
+    my $Defined_subs_for_under_0_52x;
+
+    sub define_subs_for_under_0_52x {
+
+        return if $Defined_subs_for_under_0_52x;
+
+        *array = *array = sub {
+            my ($self, $key, @values) = @_;
+
+            if ( @values ) {
+                my @old_values = $self->get_values($key);
+
+                $self->set_values($key, @values);
+
+                return @old_values;
+            }
+
+            return $self->get_values($key);
+        };
+
+        *arrayref = *arrayref = sub {
+            my ($self, $key, $arrayref) = @_;
+
+            return $self->value_hashref->{$key} = $arrayref
+                if ref $arrayref eq 'ARRAY';
+
+            return $self->value_hashref->{$key} ||= $arrayref;
+        };
+
+        eval q{ sub begin  { return } };
+        eval q{ sub before { return } };
+
+        *end = *end = sub { return };
+
+        *form_elements = *form_elements = sub {
+            my ($self, @args) = @_;
+
+            if (@args == 1
+                and defined $args[0]
+                and $args[0] eq 'ALL' || $args[0] eq 'ALLVALUES'
+            ) {
+                $args[0] = 'ALL_VALUES';
+            }
+
+            $self->output_waft_tags(@args);
+
+            return;
+        };
+
+        *query = *query = \&cgi;
+
+        *waft_tags = *waft_tags = \&get_waft_tags;
+
+        *_join_values = *_join_values = \&join_values;
+
+        *_load_query_param = *_load_query_param = sub {
+            my ($self) = @_;
+
+            $self->init_page;
+            $self->init_action;
+            $self->init_values;
+
+            return;
+        };
+
+        *__DEFAULT = *__DEFAULT = sub {
+            my ($self, @args) = @_;
+
+            return { page => 'default.html', action => $self->action }, @args;
+        };
+
+        $Defined_subs_for_under_0_52x = 1;
+
+        return;
+    }
+}
+
+package Waft::Class;
 
 use Carp;
 use English qw( -no_match_vars );
 
 sub TIEHASH {
+
     bless {};
 }
 
 sub STORE {
     if (ref $_[2] eq 'ARRAY') {
-        @{ $_[0]{defined $_[1] ? $_[1] : _undef()} } = @{$_[2]};
+        @{ $_[0]{ defined $_[1] ? $_[1] : warn_and_null() } } = @{$_[2]};
     }
     else {
-        @{ $_[0]{defined $_[1] ? $_[1] : _undef()} } = ($_[2]);
+        @{ $_[0]{ defined $_[1] ? $_[1] : warn_and_null() } } = ($_[2]);
     }
 }
 
-sub _undef () {
-    if ($WARNING) {
+sub warn_and_null () {
+
+    if ( $WARNING ) {
         carp 'Use of uninitialized value';
     }
 
-    return q{};
+    q{};
 }
 
 sub FETCH {
-    my $arrayref = $_[0]{defined $_[1] ? $_[1] : _undef()}
+    my $arrayref = $_[0]{ defined $_[1] ? $_[1] : warn_and_null() }
         or return;
 
     $arrayref->[0];
@@ -1194,9 +1598,9 @@ sub FIRSTKEY { keys %{$_[0]}; each %{$_[0]} }
 
 sub NEXTKEY  {                each %{$_[0]} }
 
-sub EXISTS { exists $_[0]{defined $_[1] ? $_[1] : _undef()} }
+sub EXISTS { exists $_[0]{ defined $_[1] ? $_[1] : warn_and_null() } }
 
-sub DELETE { delete $_[0]{defined $_[1] ? $_[1] : _undef()} }
+sub DELETE { delete $_[0]{ defined $_[1] ? $_[1] : warn_and_null() } }
 
 sub CLEAR { %{$_[0]} = () }
 
@@ -1406,13 +1810,21 @@ Waft - A simple web application framework
 
     </html>
 
+=head1 DESCRIPTION
+
+=head2 set_waft_backword_compatible_version
+
+=head2 set_default_content_type
+
+=head2 use_utf8
+
 =head1 AUTHOR
 
 Yuji Tamashiro, E<lt>yuji@tamashiro.orgE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2007 by Yuji Tamashiro
+Copyright (C) 2007, 2008 by Yuji Tamashiro
 
 This library is free software; you can redistribute it and/or modify it under
 the same terms as Perl itself.
