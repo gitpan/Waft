@@ -12,7 +12,7 @@ use Symbol;
 require Carp;
 require File::Spec;
 
-$VERSION = '0.99_01';
+$VERSION = '0.99_02';
 $VERSION = eval $VERSION;
 
 $Waft::Backword_compatible_version = $VERSION;
@@ -39,8 +39,7 @@ $Waft::Correct_NEXT_DISTINCT = 1;
 
         my $backword_compatible_version
             = $Backword_compatible_version_of{$class}
-              || $Waft::Backword_compatible_version
-              || __PACKAGE__->VERSION;
+              || $Waft::Backword_compatible_version;
 
         return $backword_compatible_version;
     }
@@ -83,39 +82,6 @@ sub dont_trust_me {
     die $EVAL_ERROR if $EVAL_ERROR;
 
     return;
-}
-
-sub carp {
-    my ($self, $error_message) = @_;
-
-    $self->dont_trust_me( sub { Carp::carp($_[0]) }, $error_message );
-
-    return;
-}
-
-{
-    my %Default_content_type_of;
-
-    sub set_default_content_type {
-        my ($class, $default_content_type) = @_;
-
-        $class->croak('This is class method') if $class->is_blessed;
-
-        $Default_content_type_of{$class} = $default_content_type;
-
-        return;
-    }
-
-    sub get_default_content_type {
-        my ($self) = @_;
-
-        my $class = ref $self || $self;
-
-        my $default_content_type = $Default_content_type_of{$class}
-                                   || 'text/html';
-
-        return $default_content_type;
-    }
 }
 
 sub use_utf8 {
@@ -166,6 +132,39 @@ sub can_use_utf8 {
     return;
 }
 
+sub carp {
+    my ($self, $error_message) = @_;
+
+    $self->dont_trust_me( sub { Carp::carp($_[0]) }, $error_message );
+
+    return;
+}
+
+{
+    my %Default_content_type_of;
+
+    sub set_default_content_type {
+        my ($class, $default_content_type) = @_;
+
+        $class->croak('This is class method') if $class->is_blessed;
+
+        $Default_content_type_of{$class} = $default_content_type;
+
+        return;
+    }
+
+    sub get_default_content_type {
+        my ($self) = @_;
+
+        my $class = ref $self || $self;
+
+        my $default_content_type = $Default_content_type_of{$class}
+                                   || 'text/html';
+
+        return $default_content_type;
+    }
+}
+
 sub waft {
     my ($self, @args) = @_;
 
@@ -183,7 +182,6 @@ sub waft {
         $self = $self->new->initialize;
     }
 
-    local $NEXT::SEEN if $NEXT::SEEN and $Waft::Correct_NEXT_DISTINCT;
     my @return_values = $self->controller(@args);
 
     return wantarray ? ($self, @return_values) : $self;
@@ -254,6 +252,7 @@ sub init_base_url {
 }
 
 sub make_base_url {
+    my ($self) = @_;
 
     my $updir = $ENV{PATH_INFO} || q{};
     my $updir_count = $updir =~ s{ /[^/]* }{../}gx;
@@ -270,14 +269,24 @@ sub make_base_url {
         }
     }
     else {
-        $url = $ENV{SCRIPT_NAME}
-               || eval q{ use FindBin qw( $Script ); $Script };
+        $url = $ENV{SCRIPT_NAME} || $self->get_script_basename;
     }
 
     my $base_url =   $url =~ m{ ([^/]+) \z}xms ? "$updir$1"
                    :                             './';
 
     return $base_url;
+}
+
+sub get_script_basename {
+    my ($self) = @_;
+
+    return $FindBin::Script if eval { FindBin::again(); 1 };
+
+    delete $INC{'FindBin.pm'};
+    require FindBin;
+
+    return $FindBin::Script;
 }
 
 sub set_base_url {
@@ -334,6 +343,10 @@ sub init_page {
 
     my $page =   $self->is_submitted ? $self->cgi->param('s')
                :                       $self->cgi->param('p');
+
+    if ( $self->get_using_utf8 ) {
+        utf8::encode($page);
+    }
 
     $page = $self->fix_and_validate_page($page);
     $self->set_page( defined $page ? $page : 'default.html' );
@@ -575,7 +588,6 @@ sub init_binmode {
     my ($self) = @_;
 
     if ( $self->get_using_utf8 ) {
-        no strict 'refs';
         eval q{ binmode select, ':utf8' };
     }
     else {
@@ -611,12 +623,13 @@ sub set_response_headers {
 sub controller {
     my ($self, @relays) = @_;
 
-    my $stash = $self->stash;
+    local $NEXT::SEEN if $NEXT::SEEN and $Waft::Correct_NEXT_DISTINCT;
 
     if ( my $coderef = $self->can('begin') ) {
         @relays = $self->call_method($coderef, @relays);
     }
 
+    my $stash = $self->stash;
     my $call_count = 0;
     METHOD:
     while ( not $stash->{output} ) {
@@ -1290,7 +1303,7 @@ sub html_escape {
 
 sub word_filter { $_[0]->html_escape(@_[1 .. $#_]) }
 
-sub page_id {
+sub get_page_id {
     my ($self, $page) = @_;
 
     if ( not defined $page ) {
@@ -1301,6 +1314,8 @@ sub page_id {
 
     return $page_id;
 }
+
+sub page_id { $_[0]->get_page_id(@_[1 .. $#_]) }
 
 sub set_value {
     my ($self, $key, $value) = @_;
@@ -1611,212 +1626,206 @@ __END__
 
 Waft - A simple web application framework
 
+=encoding utf8
+
 =head1 SYNOPSIS
 
-    ==========================================================================
-    myform.cgi
-    --------------------------------------------------------------------------
-    #!/usr/bin/perl
-    use lib 'lib';
-    require MyForm;
-    MyForm->waft;
+Waft は、アプリケーションクラスの基底クラスとなって動作する、CGI用の
+フレームワークである。
 
-    ==========================================================================
-    lib/MyForm.pm
-    --------------------------------------------------------------------------
-    package MyForm;
+    package MyWebApp;
 
     use base 'Waft';
+
+    __PACKAGE__->use_utf8;
+    __PACKAGE__->set_default_content_type('text/html; charset=UTF-8');
 
     sub __default__direct {
         my ($self) = @_;
 
-        $self->{name} = q{};
-        $self->{address} = q{};
-        $self->{phone} = q{};
-        $self->{comment} = q{};
-
         return 'TEMPLATE';
     }
 
-    sub __default__submit {
-        my ($self) = @_;
+クラスメソッド C<waft> は、アプリケーションクラスに属するオブジェクトを
+生成して、リクエストに応じたメソッドをディスパッチする。
 
-        $self->{name} = $self->query->param('name');
-        $self->{address} = $self->query->param('address');
-        $self->{phone} = $self->query->param('phone');
-        $self->{comment} = $self->query->param('comment');
+    MyWebApp->waft;
+
+また、テンプレート処理も実装している。
+
+    <%
+
+    use strict;
+    use warnings;
+
+    my ($self) = @_;
+
+    %>
+
+    <h1><% = $self->page %></h1>
+
+    <p>
+    Howdy, world!
+    </p>
+
+=head1 DESCRIPTION
+
+Waftは、1ファイルのみで構成された軽量の
+Webアプリケーションフレームワークであり、Perl 5.005 以上で動作する。（ただし、
+UTF-8 を扱うには 5.8.1 以上の Perl と 3.21 以上の L<CGI> が必要。）
+
+リクエストに応じたメソッドのディスパッチ、
+オブジェクト変数の保持、
+テンプレート処理
+等の機能を有する。
+
+=head1 DISPATCH
+
+Waft は、リクエストに応じたメソッドをディスパッチする。
+
+例えば、CGI が QUERY_STRING を指定されずに単純に GET リクエストされた場合、
+Waftは、C<__default__direct> という名前のメソッドを起動する。
+
+    http://www/mywebapp.cgi
+
+    $self->__default__direct を起動する
+
+form.html というページをリクエストされた場合は、C<__form__direct> という名前の
+メソッドを起動する。
+
+    http://www/myapp.cgi?p=form.html
+
+    $self->__form__direct を起動する
+
+form.html から "send" という名前の SUBMIT によりリクエストされた場合は、
+C<__form__send> という名前のメソッド。
+
+    http://www/myapp.cgi?s=form.html&v=&send=
+
+    $self->__form__send を起動する
+
+メソッド C<__form__send> が、"confirm.html" を戻した場合は、Waft は次に、
+C<__confirm__indirect> という名前のメソッドを起動する。
+
+    sub __form__send {
+        my ($self) = @_;
 
         return 'confirm.html';
     }
 
-    sub __confirm__indirect {
-        my ($self) = @_;
+    $self->__confirm__indirect を起動する
 
-        return 'default.html', 'error!' if length $self->{name} == 0;
+=head2 ACTION METHOD
 
-        return 'TEMPLATE';
+Waft がディスパッチするメソッドをアクションメソッドと呼ぶ。
+アクションメソッドの名前は、C<page_id> と C<action_id> で構成する。
+
+=over 4
+
+=item *
+
+page
+
+Web の 1ページに相当する単位で、アクションメソッド名の構成と
+テンプレートの選択のために使用する。C<< $self->page >> で取得できる。
+
+=item *
+
+page_id
+
+C<page> の英数字以外の文字をアンダースコアに変換し、拡張子を除いた文字列。
+form.html の場合は "form"、form/header.html の場合は、"form_header" となる。
+C<< $self->page_id >> で取得できる。
+
+=item *
+
+action
+
+C<page> へのリクエストの種別。C<page> とともに、
+アクションメソッド名を構成する。リンクによるリクエストの場合は "direct"、
+FORM からの SUBMIT によるリクエストの場合はその SUBMIT の NAME（以下の例では
+"send"）、
+
+    <input type="submit" name="send" />
+                               ^^^^
+
+クライアントからのリクエストではなく、メソッドの戻り値で指定された C<page>
+への内部のページ遷移の場合は "indirect" となる。
+
+なお、FORM からの SUBMIT によるリクエストにおいて、SUBMIT に NAME
+が指定されていない場合、C<action> は "submit" となる。
+
+    <input type="submit" />
+
+=item *
+
+action_id
+
+C<action> の先頭から . までの文字列。direct の場合は "direct"、move.map.x
+の場合は "move" となる。
+
+=back
+
+アンダースコア 2つ、C<page_id>、アンダースコア 2つ、C<action_id>
+を連結した文字列をアクションメソッドの名前とする。
+
+C<__ page_id __ action_id>
+
+=head2 return $page
+
+アクションメソッドの戻り値を次に処理する C<page> として、
+引き続きアクションメソッドのディスパッチを行う。この場合、C<action> は
+"indirect" とする。
+
+    return 'confirm.html'; # Waft は次に __confirm__indirect を起動する
+
+ただし、戻り値を以下のように指定する事で、C<action> に "indirect"
+以外の値も指定できる。
+
+    return ['form.html', 'direct']; # Waft は次に __form__direct を起動する
+
+もしくは、
+
+    return { page => 'form.html', action => 'direct' }; # same as above
+
+=head2 'CURRENT'
+
+"CURRENT" は、"現在のページ" を意味する。すなわち C<return 'CURRENT'> は、
+C<< return $self->page >> と同義である。
+
+    return 'CURRENT';
+
+    return $self->page; # same as above
+
+=head2 return 'TEMPLATE'
+
+アクションメソッドの戻り値が "TEMPLATE" の場合、
+Waft はアクションメソッドのディスパッチを終了して、C<page>
+のテンプレート処理に移行する。
+
+    sub __form__direct {
+
+        return 'TEMPLATE'; # form.html のテンプレート処理に移行する
     }
 
-    sub __confirm__submit {
-        return 'thankyou.html';
-    }
+Waft は、"CURRENT" の場合と同様に C<page> を 変更せず、C<action> を "template"
+として処理する。すなわち C<return 'TEMPLATE'> は以下と同義である。
 
-    sub __confirm__back {
-        return 'default.html';
-    }
+    return ['CURRENT', 'template'];
 
-    sub __thankyou__indirect {
-        my ($self) = @_;
+もしくは、
 
-        open my $fh, '>> form.log';
-        print {$fh} $self->{name}, "\n";
-        print {$fh} $self->{address}, "\n";
-        print {$fh} $self->{phone}, "\n";
-        print {$fh} $self->{comment}, "\n";
-        close $fh;
+    return { page => 'CURRENT', action => 'template' };
 
-        return 'TEMPLATE';
-    }
+=head2 begin
 
-    1;
+=head2 before
 
-    ==========================================================================
-    lib/MyForm.template/default.html
-    --------------------------------------------------------------------------
-    <%
-    my ($self, $error) = @_;
-    %>
-    <html>
+=head2 end
 
-    <head>
-        <title>FORM</title>
-    </head>
+=head1 OBJECT VALUE
 
-    <body>
-        <% if ($error) { %>
-            <p>
-            <% = $error %>
-            </p>
-        <% } %>
-
-        <form action="<% = $self->url %>" method="POST">
-
-        <p>
-        Name:
-        <input type="text" name="name" value="<% = $self->{name} %>" />
-        </p>
-
-        <p>
-        Address:
-        <input type="text" name="address" value="<% = $self->{address} %>" />
-        </p>
-
-        <p>
-        Phone:
-        <input type="text" name="phone" value="<% = $self->{phone} %>" />
-        </p>
-
-        <p>
-        Comment: <br />
-        <textarea name="comment"><% = $self->{comment} %></textarea>
-        </p>
-
-        <p>
-        <input type="submit" />
-        </p>
-
-        </form>
-    </body>
-
-    </html>
-
-    ==========================================================================
-    lib/MyForm.template/confirm.html
-    --------------------------------------------------------------------------
-    <%
-    my ($self) = @_;
-    %>
-    <html>
-
-    <head>
-        <title>FORM - CONFIRM</title>
-    </head>
-
-    <body>
-        <form action="<% = $self->url %>" method="POST">
-
-        <p>
-        Name: <% = $self->{name} %>
-        </p>
-
-        <p>
-        Address: <% = $self->{address} %>
-        </p>
-
-        <p>
-        Phone: <% = $self->{phone} %>
-        </p>
-
-        <p>
-        Comment: <br />
-        <% text = $self->{comment} %>
-        </p>
-
-        <p>
-        <input type="submit" />
-        <input type="submit" name="back" value="back to FORM" />
-        </p>
-
-        </form>
-    </body>
-
-    </html>
-
-    ==========================================================================
-    lib/MyForm.template/thankyou.html
-    --------------------------------------------------------------------------
-    <%
-    my ($self) = @_;
-    %>
-    <html>
-
-    <head>
-        <title>FORM - THANKYOU</title>
-    </head>
-
-    <body>
-        <p>
-        Thank you for your comment!
-        </p>
-
-        <p>
-        Name: <% = $self->{name} %>
-        </p>
-
-        <p>
-        Address: <% = $self->{address} %>
-        </p>
-
-        <p>
-        Phone: <% = $self->{phone} %>
-        </p>
-
-        <p>
-        Comment: <br />
-        <% text = $self->{comment} %>
-        </p>
-    </body>
-
-    </html>
-
-=head1 DESCRIPTION
-
-=head2 set_waft_backword_compatible_version
-
-=head2 set_default_content_type
-
-=head2 use_utf8
+=head1 TEMPLATE METHOD
 
 =head1 AUTHOR
 

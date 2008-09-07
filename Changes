@@ -1,16 +1,22 @@
 Revision history for Perl extension Waft.
 
+0.99_02  
+    - fixed a UTF-8 problem in initializing a page
+    - modified code to get script basename and added a few tests
+    - other minor spec changes
+    - added pod for DISPATCH 
+
 0.99_01  Sun Aug 31 22:09:14 2008
-	- complete rewrite
-	- fixed to run undef taint mode
-	- add processing about template
-		- return 'not_found.html' when not found
-		- return 'internal_server_error.html' when failed to stat()
-		- return 'forbidden.html' when failed to open()
-		- add action methods of these pages
-	- other minor spec changes and bug fixes
+    - complete rewrite
+    - fixed to run undef taint mode
+    - add processing about template
+        - return 'not_found.html' when not found
+        - return 'internal_server_error.html' when failed to stat()
+        - return 'forbidden.html' when failed to open()
+        - add action methods of these pages
+    - other minor spec changes and bug fixes
 
 0.52  Fri Dec 28 11:58:36 2007
-	- original version; created by h2xs 1.23 with options
-		-AX -n Waft -v 0.52
+    - original version; created by h2xs 1.23 with options
+        -AX -n Waft -v 0.52
 

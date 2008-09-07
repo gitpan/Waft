@@ -1,6 +1,7 @@
 Changes
-Makefile.PL
 MANIFEST
+Makefile.PL
 README
-t/Waft.t
 lib/Waft.pm
+t/get_script_basename.t
+t/get_script_basename.t.change_test
