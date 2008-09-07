@@ -12,7 +12,7 @@ use Symbol;
 require Carp;
 require File::Spec;
 
-$VERSION = '0.99_02';
+$VERSION = '0.99_03';
 $VERSION = eval $VERSION;
 
 $Waft::Backword_compatible_version = $VERSION;
