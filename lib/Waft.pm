@@ -12,10 +12,12 @@ use Symbol;
 require Carp;
 require File::Spec;
 
-$VERSION = '0.99_03';
+$VERSION = '0.99_04';
 $VERSION = eval $VERSION;
 
 $Waft::Backword_compatible_version = $VERSION;
+@Waft::Allow_template_file_exts = qw( .html .css .js .txt );
+$Waft::Cache = 1;
 $Waft::Correct_NEXT_DISTINCT = 1;
 
 {
@@ -141,6 +143,50 @@ sub carp {
 }
 
 {
+    my %Allow_template_file_exts_arrayref_of;
+
+    sub set_allow_template_file_exts {
+        my ($class, @allow_template_file_exts) = @_;
+
+        $class->croak('This is class method') if $class->is_blessed;
+
+        $Allow_template_file_exts_arrayref_of{$class}
+            = \@allow_template_file_exts;
+
+        return;
+    }
+
+    sub is_allowed_to_use_template_file_ext {
+        my ($self, $page) = @_;
+
+        my @allow_template_file_exts = $self->get_allow_template_file_exts;
+
+        for my $allow_template_file_ext ( @allow_template_file_exts ) {
+            if (length $allow_template_file_ext == 0) {
+                return 1 if $page !~ / \. /xms;
+            }
+
+            return 1 if $page =~ / \Q$allow_template_file_ext\E \z/xms;
+        }
+
+        return;
+    }
+
+    sub get_allow_template_file_exts {
+        my ($self) = @_;
+
+        return if $self->BCV < 0.53;
+
+        my $class = ref $self || $self;
+
+        return @{ $Allow_template_file_exts_arrayref_of{$class} }
+            if exists $Allow_template_file_exts_arrayref_of{$class};
+
+        return @Waft::Allow_template_file_exts;
+    }
+}
+
+{
     my %Default_content_type_of;
 
     sub set_default_content_type {
@@ -191,7 +237,7 @@ sub new {
     my ($class) = @_;
 
     my $self;
-    tie %$self, 'Waft::Class';
+    tie %$self, 'Waft::Object';
     bless $self, $class;
 
     if ($class->BCV < 0.53) {
@@ -200,7 +246,7 @@ sub new {
         $class->define_subs_for_under_0_52x;
 
         my $self;
-        tie %$self, 'Waft::Class';
+        tie %$self, 'Waft::Object';
         bless $self, $class;
 
         my ($option_hashref, @return_values);
@@ -344,7 +390,7 @@ sub init_page {
     my $page =   $self->is_submitted ? $self->cgi->param('s')
                :                       $self->cgi->param('p');
 
-    if ( $self->get_using_utf8 ) {
+    if ( $self->get_using_utf8 and defined $page ) {
         utf8::encode($page);
     }
 
@@ -828,10 +874,32 @@ sub get_template_file {
     return $self->find_template_file($page);
 }
 
-sub find_template_file {
+{
+    my %Cached_template_file;
+
+    sub find_template_file {
+        my ($self, $page) = @_;
+
+        my $class = ref $self || $self;
+
+        return @{ $Cached_template_file{$class, $page} }
+            if $Waft::Cache and exists $Cached_template_file{$class, $page};
+
+        my ($template_file, $template_class)
+            = $self->recursive_find_template_file($page, $class);
+
+        return if not defined $template_file;
+
+        $Cached_template_file{$class, $page}
+            = [$template_file, $template_class];
+
+        return $template_file, $template_class;
+    }
+}
+
+sub recursive_find_template_file {
     my ($self, $page, $class, $seen) = @_;
 
-    $class ||= ref $self || $self;
     return if $seen->{$class}++;
 
     my $class_path = $class;
@@ -843,18 +911,24 @@ sub find_template_file {
            : $INC{$module_file} =~ m{\A (.+) /\Q$module_file\E \z}xms ? ($1)
            :                                                            @INC;
 
-    my $finding_file = "$class_path.template/$page";
-    for my $lib_dir ( @lib_dirs ) {
-        my $template_file = "$lib_dir/$finding_file";
+    my @finding_files;
+    if ( $class->is_allowed_to_use_template_file_ext($page) ) {
+        push @finding_files, "$class_path/$page";
+    }
+    push @finding_files, "$class_path.template/$page";
 
-        return $template_file, $class if -f $template_file;
+    for my $lib_dir ( @lib_dirs ) {
+        for my $finding_file ( @finding_files ) {
+            my $template_file = "$lib_dir/$finding_file";
+
+            return $template_file, $class if -f $template_file;
+        }
     }
 
     my @super_classes = do { no strict 'refs'; @{ "${class}::ISA" } };
-
     for my $super_class ( @super_classes ) {
         my ($template_file, $template_class)
-            = $self->find_template_file($page, $super_class, $seen);
+            = $self->recursive_find_template_file($page, $super_class, $seen);
 
         return $template_file, $template_class if defined $template_file;
     }
@@ -886,7 +960,7 @@ sub find_template_file {
         my $template_id = "$template_name-$modified_time";
 
         return $Cached_template_coderef{$template_id}
-            if exists $Cached_template_coderef{$template_id};
+            if $Waft::Cache and exists $Cached_template_coderef{$template_id};
 
         my $old_template_id_regexp = qr/\A \Q$template_name\E - \d{14} \z/xms;
         CACHED_TEMPLATE:
@@ -1574,7 +1648,7 @@ sub include { $_[0]->call_template(@_[1 .. $#_]) }
     }
 }
 
-package Waft::Class;
+package Waft::Object;
 
 use Carp;
 use English qw( -no_match_vars );

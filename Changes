@@ -1,5 +1,16 @@
 Revision history for Perl extension Waft.
 
+0.99_04  Mon Sep 15 21:44:40 2008
+    - refixed UTF-8 problem in initializing a page
+    - usual lib directory (lib/Module/) also came to be found in
+      find_template_file(), in addition to template directory
+      (lib/Module.template/)
+        but in this case, template file extension is limited in .html, .css,
+        .js and .txt. you can change these with set_allow_template_file_exts()
+    - added cache processing in find_template_file()
+    - changed class name of Waft object back to Waft::Object from Waft::Class
+    - added $Waft::Cache for debug to disable cache processing
+
 0.99_03  Mon Sep  8 01:17:57 2008
     - fixed a UTF-8 problem in initializing a page
     - modified code to get script basename and added a few tests
