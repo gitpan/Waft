@@ -13,35 +13,37 @@ my $obj = Waft::Test::FindTemplateFile->new;
 my ($template_file, $template_class);
 
 ($template_file, $template_class)
-    = $obj->find_template_file('own_template.html');
-ok( $template_file eq 't/Waft/Test/FindTemplateFile/own_template.html');
+    = $obj->find_template_file('own_template2.html');
+ok( $template_file eq 't/Waft/Test/FindTemplateFile/own_template2.html' );
 ok( $template_class eq 'Waft::Test::FindTemplateFile' );
 
 ($template_file, $template_class)
-    = $obj->find_template_file('base_template.html');
-ok( $template_file eq 't/Waft/Test/base_template.html');
+    = $obj->find_template_file('base_template2.html');
+ok( $template_file eq 't/Waft/Test/base_template2.html' );
 ok( $template_class eq 'Waft::Test' );
 
 @Waft::Test::FindTemplateFile::ISA = ('Waft');
 
 ($template_file, $template_class)
-    = $obj->find_template_file('own_template.html');
-ok( $template_file eq 't/Waft/Test/FindTemplateFile/own_template.html');
+    = $obj->find_template_file('own_template2.html');
+ok( $template_file eq 't/Waft/Test/FindTemplateFile/own_template2.html' );
 ok( $template_class eq 'Waft::Test::FindTemplateFile' );
 
 ($template_file, $template_class)
-    = $obj->find_template_file('base_template.html');
-ok( $template_file eq 't/Waft/Test/base_template.html');
+    = $obj->find_template_file('base_template2.html');
+ok( $template_file eq 't/Waft/Test/base_template2.html' );
 ok( $template_class eq 'Waft::Test' );
 
-$Waft::Cache = ! $Waft::Cache;
+{
+    local $Waft::Cache = $Waft::Cache && 0;
 
-($template_file, $template_class)
-    = $obj->find_template_file('own_template.html');
-ok( $template_file eq 't/Waft/Test/FindTemplateFile/own_template.html');
-ok( $template_class eq 'Waft::Test::FindTemplateFile' );
+    ($template_file, $template_class)
+        = $obj->find_template_file('own_template2.html');
+    ok( $template_file eq 't/Waft/Test/FindTemplateFile/own_template2.html' );
+    ok( $template_class eq 'Waft::Test::FindTemplateFile' );
 
-($template_file, $template_class)
-    = $obj->find_template_file('base_template.html');
-ok( not defined $template_file );
-ok( not defined $template_class );
+    ($template_file, $template_class)
+        = $obj->find_template_file('base_template2.html');
+    ok( not defined $template_file );
+    ok( not defined $template_class );
+}

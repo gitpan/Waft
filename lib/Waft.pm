@@ -12,13 +12,49 @@ use Symbol;
 require Carp;
 require File::Spec;
 
-$VERSION = '0.99_04';
+$VERSION = '0.9905';
 $VERSION = eval $VERSION;
 
 $Waft::Backword_compatible_version = $VERSION;
 @Waft::Allow_template_file_exts = qw( .html .css .js .txt );
 $Waft::Cache = 1;
 $Waft::Correct_NEXT_DISTINCT = 1;
+
+sub import {
+    my ($base, @mixins) = @_;
+
+    if ( defined $mixins[0] and $mixins[0] eq 'with' ) {
+        shift @mixins;
+    }
+
+    return if @mixins == 0;
+
+    my $caller = caller;
+    my @bases = (@mixins, $base);
+
+    BASE:
+    for my $base ( @bases ) {
+        if ( $base =~ /\A :: /xms ) {
+            $base = 'Waft' . $base;
+        }
+
+        next BASE if $caller->isa($base);
+
+        eval qq{ require $base };
+
+        if ( $EVAL_ERROR ) {
+            die $EVAL_ERROR if $EVAL_ERROR !~ /\ACan't locate .*? at \(eval /;
+
+            Carp::croak($EVAL_ERROR)
+                if do { no strict 'refs'; not %{ "${base}::" } };
+        }
+
+        no strict 'refs';
+        push @{ "${caller}::ISA" }, $base;
+    }
+
+    return;
+}
 
 {
     my %Backword_compatible_version_of;
@@ -465,7 +501,7 @@ sub to_page_id {
     my ($self, $page) = @_;
 
     my $page_id = $page;
-    $page_id =~ s{ \.[^/:\\]* \z}{}xmx;
+    $page_id =~ s{ \.[^/:\\]* \z}{}xms;
     $page_id =~ tr/0-9A-Za-z_/_/c;
 
     return $page_id;
@@ -709,7 +745,8 @@ sub controller {
         last METHOD if $stash->{output};
     }
     continue {
-        $self->croak('Deep recursion on controller') if ++$call_count > 4;
+        $self->croak('Methods called too many times in controller')
+            if ++$call_count > 4;
     }
 
     if ( $self->can('end') ) {
@@ -912,10 +949,10 @@ sub recursive_find_template_file {
            :                                                            @INC;
 
     my @finding_files;
+    push @finding_files, "$class_path.template/$page";
     if ( $class->is_allowed_to_use_template_file_ext($page) ) {
         push @finding_files, "$class_path/$page";
     }
-    push @finding_files, "$class_path.template/$page";
 
     for my $lib_dir ( @lib_dirs ) {
         for my $finding_file ( @finding_files ) {
@@ -1346,7 +1383,7 @@ sub text_filter {
         }
 
         $value = expand($value);
-        $self->html_escape($value);
+        $value = $self->html_escape($value);
         $value =~ s{ (\s) \x20                 }{$1&nbsp;}gxms;
         $value =~ s{ ( \x0D\x0A | [\x0A\x0D] ) }{<br />$1}gxms;
     }
@@ -1443,6 +1480,42 @@ sub make_url {
 }
 
 sub url { $_[0]->make_url(@_[1 .. $#_]) }
+
+sub make_absolute_url {
+    my ($self, @args) = @_;
+
+    my $protocol = $self->cgi->protocol;
+
+    my $base_url = "$protocol://";
+
+    if ( defined $ENV{HTTP_HOST} ) {
+        $base_url .= $ENV{HTTP_HOST};
+    }
+    else {
+        $base_url .= $ENV{SERVER_NAME};
+
+        if (    $protocol eq 'http'  and $ENV{SERVER_PORT} != 80
+             or $protocol eq 'https' and $ENV{SERVER_PORT} != 443
+        ) {
+            $base_url .= ":$ENV{SERVER_PORT}";
+        }
+    }
+
+    if ( defined $ENV{REQUEST_URI}
+         and $ENV{REQUEST_URI} =~ /\A ([^?]+) /xms
+    ) {
+        $base_url .= $1;
+    }
+    else {
+        $base_url .= $ENV{SCRIPT_NAME};
+    }
+
+    local $Waft::Base_url = $base_url;
+
+    return $self->make_url(@args);
+}
+
+sub absolute_url { $_[0]->make_absolute_url(@_[1 .. $#_]) }
 
 sub make_query_string {
     my ($self, $page, @keys_arrayref_or_key_value_pairs) = @_;
@@ -1744,7 +1817,7 @@ Waft は、アプリケーションクラスの基底クラスとなって動作
 
 =head1 DESCRIPTION
 
-Waftは、1ファイルのみで構成された軽量の
+Waft は、1ファイルのみで構成された軽量の
 Webアプリケーションフレームワークであり、Perl 5.005 以上で動作する。（ただし、
 UTF-8 を扱うには 5.8.1 以上の Perl と 3.21 以上の L<CGI> が必要。）
 
@@ -1757,7 +1830,7 @@ UTF-8 を扱うには 5.8.1 以上の Perl と 3.21 以上の L<CGI> が必要�
 
 Waft は、リクエストに応じたメソッドをディスパッチする。
 
-例えば、CGI が QUERY_STRING を指定されずに単純に GET リクエストされた場合、
+CGI が QUERY_STRING を指定されずに単純に GET リクエストされた場合、
 Waftは、C<__default__direct> という名前のメソッドを起動する。
 
     http://www/mywebapp.cgi
@@ -1893,13 +1966,173 @@ Waft は、"CURRENT" の場合と同様に C<page> を 変更せず、C<action> 
 
 =head2 begin
 
+Waft の処理の開始時にディスパッチされるメソッド。
+
+         begin
+           |
+           |<---------------------------+
+         before                         |
+           |                            |
+     ACTION METHOD  return 'other.html' |
+           +----------------------------+
+           | return 'TEMPLATE'
+           |
+         before
+           |
+    TEMPLATE PROCESS
+           |
+           |
+          end
+
+C<begin> と C<before> の戻り値は、アクションメソッドのそれと同様に処理される。
+
+    sub begin {
+
+        return 'TEMPLATE'; # アクションメソッドをディスパッチせずにテンプレー
+                           # ト処理に移行する
+    }
+
 =head2 before
+
+アクションメソッドをディスパッチする前、およびテンプレート処理を行う前に
+ディスパッチされるメソッド。
+
+    sub before {
+        my ($self) = @_;
+
+        return if $self->page eq 'login.html';
+
+        return 'login.html' if not $self->login_ok;
+
+        return;
+    }
 
 =head2 end
 
+Waft の処理の終了時にディスパッチされるメソッド。
+
 =head1 OBJECT VALUE
 
-=head1 TEMPLATE METHOD
+Waft が生成するオブジェクトが持つ値をオブジェクト変数と呼ぶ。
+オブジェクト変数は QUERY_STRING および FORM に展開され、
+ページ遷移後に生成されるオブジェクトに引き継がれる。
+
+    sub __default__direct {
+        my ($self) = @_;
+
+        $self->{page} = 0;
+        $self->{sort} = 'id';
+
+        return 'TEMPLATE';
+    }
+
+    <a href="<% = $self->url('page.html', 'ALL_VALUES') %>">
+
+    page.html へ遷移するリンクの QUERY_STRING にオブジェクト変数が展開される
+
+
+    sub __page__direct {
+        my ($self) = @_;
+
+        $self->{page} # 0
+        $self->{sort} # 'id'
+
+QUERY_STRING の場合は、引き継ぐ値、もしくは "ALL_VALUES" の指定が
+必要であるが、FORM の場合はメソッド C<compile_template> が自動的に展開する。
+
+    <form action="<% = $self->url %>">
+    <input type="submit" />
+    </form>
+
+    compile_template が <form></form> の中に自動的に展開する
+
+オブジェクト変数は 1次元のハッシュ変数で管理されるため、
+リファレンスを引き継ぐ事はできない。また、C<undef> も引き継ぐ事ができない。
+
+ただし、メソッド C<set_values>、C<get_values> により 1つのキーでリストを扱う事
+ができる。
+
+    $self->set_values( sort => qw( id ASC ) );
+
+    $self->{sort}                # 'id'
+    $self->get_value('sort')     # same as above
+    $self->get_values('sort')    # ('id', 'ASC')
+    $self->get_values('sort', 1) # ('ASC')
+
+=head1 TEMPLATE PROCESS
+
+Waft は、Perl コードをスクリプトレットとして処理するテンプレート処理機能を
+持つ。
+
+C<page> をテンプレートファイルとして処理する。
+テンプレートファイルはアプリケーションクラスおよびその基底クラスのモジュールが
+配置されているディレクトリから検索される。
+
+アプリケーションクラス "MyWebApp" が、基底クラス "Waft::CGISession"、"Waft" を
+継承している場合、default.html は以下の順に検索される。
+
+    lib/MyWebApp.template/default.html
+    lib/MyWebApp/default.html
+    lib/Waft/CGISession.template/default.html
+    lib/Waft/CGISession/default.html
+    lib/Waft.template/default.html
+    lib/Waft/default.html
+
+C<page> が C<@Waft::Allow_template_file_exts> に定義されていない拡張子
+（.html、.css、.js、.txt 以外の拡張子）である場合は、検索されるディレクトリは
+.template のみとなる。
+
+    lib/MyWebApp.template/module.pm
+    lib/Waft/CGISession.template/module.pm
+    lib/Waft.template/module.pm
+
+最初に見つかったファイルをテンプレートファイルとして処理する。
+
+テンプレートファイル内の "<%" と "%>" で囲まれた部分はスクリプトレットとして
+処理される。
+
+    <% for ( 1 .. 10 ) { %>
+        <br />
+    <% } %>
+
+"<%word=" と "%>" で囲まれた部分は、評価結果がエスケープされて出力される。
+
+    <% for ( 1 .. 4 ) { %>
+        <%word= $_ %> * 2 = <%word= $_ * 2 %><br />
+    <% } %>
+
+    1 * 2 = 2
+    2 * 2 = 4
+    3 * 2 = 6
+    4 * 2 = 8
+
+
+    <% my $break = '<br />'; %>
+    <%word= $break %>
+
+    &lt;br /&gt;
+
+"<%word=" は "<%w=" もしくは "<%=" に省略できる。スペースを空ける事もできる。
+
+    <%word=$self->url%>
+    <%w= $self->url %>  <!-- same as above -->
+    <% = $self->url %>  <!-- same as above -->
+
+"<%text=" と "%>" で囲まれた部分は、評価結果がエスケープされ、
+さらにタブ文字の展開と改行タグの挿入が行われて出力される。
+
+    <% my $text = "Header\n\tItem1\n\tItem2"; %>
+    <%text= $text %>
+
+    Header<br />
+     &nbsp; &nbsp; &nbsp; &nbsp;Item1<br />
+     &nbsp; &nbsp; &nbsp; &nbsp;Item2
+
+"<%text=" は "<%t=" に省略できる。
+"<%word=" と同様にスペースを空ける事もできる。
+
+    <%text=$self->{text}%>
+    <% t = $self->{text} %> <!-- same as above -->
 
 =head1 AUTHOR
 

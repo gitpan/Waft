@@ -1,5 +1,12 @@
 Revision history for Perl extension Waft.
 
+0.9905  Sun Nov  2 03:49:46 2008
+    - fixed HTML escape problem in text_filter()
+    - added mixin support
+    - added methods for make absolute url
+    - other minor spec changes and bug fixes
+    - added pod
+
 0.99_04  Mon Sep 15 21:44:40 2008
     - refixed UTF-8 problem in initializing a page
     - usual lib directory (lib/Module/) also came to be found in
