@@ -4,11 +4,16 @@ Makefile.PL
 README
 lib/Waft.pm
 t/1st-Waft-Test-STDERR.t
+t/compile_template.t
+t/expand_tabs.t
 t/find_template_file.t
 t/find_template_file-cache.t
 t/get_script_basename.t
 t/get_script_basename.t.change_test
+t/initialize.t
+t/initialize-under_0_99x.t
 t/init_page-utf8.t
+t/jsstr_filter.t
 t/make_absolute_url.t
 t/mixin.t
 t/text_filter.t
@@ -35,4 +40,6 @@ t/Waft/Test/FindTemplateFile/own_template2.html
 t/Waft/Test/FindTemplateFile.template/own_module1.pm
 t/Waft/Test/FindTemplateFile.template/own_template1.html
 t/Waft/Test/Mixin1.pm
+t/Waft/Test/Mixin1/template.html
 t/Waft/Test/Mixin2.pm
+t/Waft/Test/Mixin2/module.pm

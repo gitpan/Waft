@@ -12,7 +12,7 @@ use Symbol;
 require Carp;
 require File::Spec;
 
-$VERSION = '0.9905';
+$VERSION = '0.9906';
 $VERSION = eval $VERSION;
 
 $Waft::Backword_compatible_version = $VERSION;
@@ -192,33 +192,25 @@ sub carp {
         return;
     }
 
-    sub is_allowed_to_use_template_file_ext {
-        my ($self, $page) = @_;
-
-        my @allow_template_file_exts = $self->get_allow_template_file_exts;
-
-        for my $allow_template_file_ext ( @allow_template_file_exts ) {
-            if (length $allow_template_file_ext == 0) {
-                return 1 if $page !~ / \. /xms;
-            }
-
-            return 1 if $page =~ / \Q$allow_template_file_ext\E \z/xms;
-        }
-
-        return;
-    }
-
     sub get_allow_template_file_exts {
-        my ($self) = @_;
-
-        return if $self->BCV < 0.53;
-
-        my $class = ref $self || $self;
+        my ($class) = ( $_[1] || $_[0] );
 
         return @{ $Allow_template_file_exts_arrayref_of{$class} }
             if exists $Allow_template_file_exts_arrayref_of{$class};
 
-        return @Waft::Allow_template_file_exts;
+        my $get_allowed_exts = do {
+            no strict 'refs';
+            *{ "${class}::allow_template_file_exts" }{CODE};
+        };
+
+        my @allow_template_file_exts
+            =   $get_allowed_exts ? $get_allowed_exts->($class)
+              :                     @Waft::Allow_template_file_exts;
+
+        $Allow_template_file_exts_arrayref_of{$class}
+            = \@allow_template_file_exts;
+
+        return @allow_template_file_exts;
     }
 }
 
@@ -276,6 +268,10 @@ sub new {
     tie %$self, 'Waft::Object';
     bless $self, $class;
 
+    if ($class->BCV < 1.0) {
+        $class->define_subs_for_under_0_99x;
+    }
+
     if ($class->BCV < 0.53) {
         ( undef, my @args ) = @_;
 
@@ -314,17 +310,17 @@ sub new {
 sub initialize {
     my ($self) = @_;
 
-    $self->init_base_url;
-    $self->init_page;
-    $self->init_values;
-    $self->init_action;
-    $self->init_response_headers;
-    $self->init_binmode;
+    $self->initialize_base_url;
+    $self->initialize_page;
+    $self->initialize_values;
+    $self->initialize_action;
+    $self->initialize_response_headers;
+    $self->initialize_binmode;
 
     return $self;
 }
 
-sub init_base_url {
+sub initialize_base_url {
     my ($self) = @_;
 
     my $base_url = $self->make_base_url;
@@ -420,7 +416,7 @@ sub ident {
     return $ident;
 }
 
-sub init_page {
+sub initialize_page {
     my ($self) = @_;
 
     my $page =   $self->is_submitted ? $self->cgi->param('s')
@@ -515,7 +511,7 @@ sub set_page {
     return;
 }
 
-sub init_values {
+sub initialize_values {
     my ($self, $joined_values) = @_;
 
     $self->clear_values;
@@ -577,7 +573,7 @@ sub set_values {
     return;
 }
 
-sub init_action {
+sub initialize_action {
     my ($self) = @_;
 
     my $action = $self->find_first_action;
@@ -666,7 +662,15 @@ sub set_action {
     return;
 }
 
-sub init_binmode {
+sub initialize_response_headers {
+    my ($self) = @_;
+
+    $self->set_response_headers( () );
+
+    return;
+}
+
+sub initialize_binmode {
     my ($self) = @_;
 
     if ( $self->get_using_utf8 ) {
@@ -676,14 +680,6 @@ sub init_binmode {
         no strict 'refs';
         binmode select;
     }
-
-    return;
-}
-
-sub init_response_headers {
-    my ($self) = @_;
-
-    $self->set_response_headers( () );
 
     return;
 }
@@ -950,7 +946,7 @@ sub recursive_find_template_file {
 
     my @finding_files;
     push @finding_files, "$class_path.template/$page";
-    if ( $class->is_allowed_to_use_template_file_ext($page) ) {
+    if ( $self->is_allowed_to_use_template_file_ext($page, $class) ) {
         push @finding_files, "$class_path/$page";
     }
 
@@ -968,6 +964,28 @@ sub recursive_find_template_file {
             = $self->recursive_find_template_file($page, $super_class, $seen);
 
         return $template_file, $template_class if defined $template_file;
+    }
+
+    return;
+}
+
+sub is_allowed_to_use_template_file_ext {
+    my ($self, $page, $class) = @_;
+
+    return if $self->BCV < 0.53;
+
+    my @allow_template_file_exts
+        = $self->get_allow_template_file_exts($class);
+
+    EXT:
+    for my $allow_template_file_ext ( @allow_template_file_exts ) {
+        if (length $allow_template_file_ext == 0) {
+            return 1 if $page !~ / \. /xms;
+
+            next EXT;
+        }
+
+        return 1 if $page =~ / \Q$allow_template_file_ext\E \z/xms;
     }
 
     return;
@@ -1062,6 +1080,20 @@ sub compile_template {
 
     $template =~ s{ (?<= %> ) (?! <% ) (.+?) (?= <% ) }
                   { $self->convert_text_part($1, $break) }egxms;
+
+    $template
+        =~ s{<% (?! \s*[\x0A\x0D]
+                    =[A-Za-z]
+                )
+                \s* j(?:sstr)? \s* = (.*?)
+             %>}{\$Waft::Self->output( \$Waft::Self->jsstr_filter($1) );}gxms;
+
+    $template
+        =~ s{<% (?! \s*[\x0A\x0D]
+                    =[A-Za-z]
+                )
+                \s* p(?:lain)? \s* = (.*?)
+             %>}{\$Waft::Self->output($1);}gxms;
 
     $template
         =~ s{<% (?! \s*[\x0A\x0D]
@@ -1355,20 +1387,27 @@ sub get_response_headers {
     return @{ $self->stash->{response_headers} }
 }
 
-BEGIN {
-    # export 'expand' for text_filter
-    eval q{ use Text::Tabs 2005.0824 };
+sub jsstr_filter { $_[0]->jsstr_escape(@_[1 .. $#_]) }
 
-    # generate simple expand if faild to use Text::Tabs
-    if ($EVAL_ERROR) {
-        *expand = sub {
-            my ($value) = @_;
+sub jsstr_escape {
+    my ($self, @values) = @_;
 
-            $value =~ s/ \t /        /gxms;
+    VALUE:
+    for my $value (@values) {
+        if ( not defined $value ) {
+            $self->carp('Use of uninitialized value');
 
-            return $value;
-        };
+            next VALUE;
+        }
+
+        $value =~ s{ (["'/\\]) }{\\$1}gxms;
+        $value =~ s/ \x0A /\\n/gxms;
+        $value =~ s/ \x0D /\\r/gxms;
+        $value =~ s/ < /\\x3C/gxms;
+        $value =~ s/ > /\\x3E/gxms;
     }
+
+    return wantarray ? @values : $values[0];
 }
 
 sub text_filter {
@@ -1382,10 +1421,36 @@ sub text_filter {
             next VALUE;
         }
 
-        $value = expand($value);
+        $value = $self->expand_tabs($value);
         $value = $self->html_escape($value);
         $value =~ s{ (\s) \x20                 }{$1&nbsp;}gxms;
         $value =~ s{ ( \x0D\x0A | [\x0A\x0D] ) }{<br />$1}gxms;
+    }
+
+    return wantarray ? @values : $values[0];
+}
+
+sub expand_tabs {
+    my ($self, @values) = @_;
+
+    VALUE:
+    for my $value (@values) {
+        if ( not defined $value ) {
+            $self->carp('Use of uninitialized value');
+
+            next VALUE;
+        }
+
+        $value =~ s{( [^\x0A\x0D]+ )}{
+            my $line = $1;
+
+            while ( $line =~ / \t /gxms ) {
+                my $offset = pos($line) - 1;
+                substr( $line, $offset, 1 ) = q{ } x ( 8 - $offset % 8 );
+            }
+
+            $line;
+        }egxms;
     }
 
     return wantarray ? @values : $values[0];
@@ -1644,6 +1709,27 @@ sub __internal_server_error__indirect {
 sub include { $_[0]->call_template(@_[1 .. $#_]) }
 
 {
+    my $Defined_subs_for_under_0_99x;
+
+    sub define_subs_for_under_0_99x {
+
+        return if $Defined_subs_for_under_0_99x;
+
+        *init_base_url = sub { $_[0]->initialize_base_url(@_[1 .. $#_]) };
+        *init_page = sub { $_[0]->initialize_page(@_[1 .. $#_]) };
+        *init_values = sub { $_[0]->initialize_values(@_[1 .. $#_]) };
+        *init_action = sub { $_[0]->initialize_action(@_[1 .. $#_]) };
+        *init_response_headers
+            = sub { $_[0]->initialize_response_headers(@_[1 .. $#_]) };
+        *init_binmode = sub { $_[0]->initialize_binmode(@_[1 .. $#_]) };
+
+        *expand = sub { Waft->expand_tabs(@_) };
+
+        $Defined_subs_for_under_0_99x = 1;
+
+        return;
+    }
+
     my $Defined_subs_for_under_0_52x;
 
     sub define_subs_for_under_0_52x {
@@ -2125,14 +2211,22 @@ C<page> が C<@Waft::Allow_template_file_exts> に定義されていない拡張
     <%text= $text %>
 
     Header<br />
-     &nbsp; &nbsp; &nbsp; &nbsp;Item1<br />
-     &nbsp; &nbsp; &nbsp; &nbsp;Item2
+    &nbsp; &nbsp; &nbsp; &nbsp; Item1<br />
+    &nbsp; &nbsp; &nbsp; &nbsp; Item2
 
 "<%text=" は "<%t=" に省略できる。
 "<%word=" と同様にスペースを空ける事もできる。
 
     <%text=$self->{text}%>
     <% t = $self->{text} %> <!-- same as above -->
+
+"<%jsstr=" と "%>" で囲まれた部分は、JavaScript に必要なエスケープが行われる。
+
+    alert('<%jsstr= '</script>' %>');
+
+    alert('\x3C\/script\x3E');
+
+"<%jsstr=" は "<%j=" に省略できて、他と同様にスペースも空けられる。
 
 =head1 AUTHOR
 

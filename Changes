@@ -1,5 +1,10 @@
 Revision history for Perl extension Waft.
 
+0.9906  Mon Nov 10 00:18:53 2008
+    - added escape support for JavaScript string
+    - support CR only line break in text_filter(). (not using Text::Tabs)
+    - other minor spec changes and bug fixes
+
 0.9905  Sun Nov  2 03:49:46 2008
     - fixed HTML escape problem in text_filter()
     - added mixin support

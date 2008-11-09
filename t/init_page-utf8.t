@@ -39,7 +39,7 @@ __PACKAGE__->use_utf8;
 
     my $stderr = Waft::Test::STDERR->new;
 
-    $self->init_page;
+    $self->initialize_page;
 
     ok( length $stderr->get == 0 );
 }
@@ -50,7 +50,7 @@ __PACKAGE__->use_utf8;
     local $ENV{REQUEST_METHOD} = 'GET';
     local $ENV{QUERY_STRING} = 'p=utf8_test.html';
 
-    $self->init_page;
+    $self->initialize_page;
 
     ok( not utf8::is_utf8( $self->get_page ) );
 }

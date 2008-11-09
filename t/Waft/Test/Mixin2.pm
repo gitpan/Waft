@@ -1,5 +1,6 @@
 package Waft::Test::Mixin2;
 
+use constant allow_template_file_exts => qw( .pm );
 use strict;
 use vars qw( $VERSION );
 BEGIN { eval { require warnings } ? 'warnings'->import : ( $^W = 1 ) }
