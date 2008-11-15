@@ -1,5 +1,10 @@
 Revision history for Perl extension Waft.
 
+0.9907  Sun Nov 16 04:11:52 2008
+    - added method next() for mixin. it's too simple at this time. in the
+      future, it will support mutiple inheritance
+    - other minor spec changes and bug fixes
+
 0.9906  Mon Nov 10 00:18:53 2008
     - added escape support for JavaScript string
     - support CR only line break in text_filter(). (not using Text::Tabs)
@@ -18,7 +23,7 @@ Revision history for Perl extension Waft.
       find_template_file(), in addition to template directory
       (lib/Module.template/)
         but in this case, template file extension is limited in .html, .css,
-        .js and .txt. you can change these with set_allow_template_file_exts()
+        .js and .txt. you can change them with set_allow_template_file_exts()
     - added cache processing in find_template_file()
     - changed class name of Waft object back to Waft::Object from Waft::Class
     - added $Waft::Cache for debug to disable cache processing
@@ -31,7 +36,7 @@ Revision history for Perl extension Waft.
 
 0.99_01  Sun Aug 31 22:09:14 2008
     - complete rewrite
-    - fixed to run undef taint mode
+    - fixed to run under taint mode
     - add processing about template
         - return 'not_found.html' when not found
         - return 'internal_server_error.html' when failed to stat()

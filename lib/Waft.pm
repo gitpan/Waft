@@ -2,17 +2,16 @@ package Waft;
 
 use 5.005;
 use strict;
-use vars qw( $VERSION @CARP_NOT );
+use vars qw( $VERSION );
 BEGIN { eval { require warnings } ? 'warnings'->import : ( $^W = 1 ) }
 
 use CGI qw( -no_debug );
 use English qw( -no_match_vars );
 use Fcntl qw( :DEFAULT );
 use Symbol;
-require Carp;
 require File::Spec;
 
-$VERSION = '0.9906';
+$VERSION = '0.9907';
 $VERSION = eval $VERSION;
 
 $Waft::Backword_compatible_version = $VERSION;
@@ -43,10 +42,14 @@ sub import {
         eval qq{ require $base };
 
         if ( $EVAL_ERROR ) {
-            die $EVAL_ERROR if $EVAL_ERROR !~ /\ACan't locate .*? at \(eval /;
+            CORE::die($EVAL_ERROR)
+                if $EVAL_ERROR !~ /\ACan't locate .*? at \(eval /;
 
-            Carp::croak($EVAL_ERROR)
-                if do { no strict 'refs'; not %{ "${base}::" } };
+            if ( not do { no strict 'refs'; %{ "${base}::" } } ) {
+                require Carp;
+
+                Carp::croak($EVAL_ERROR);
+            }
         }
 
         no strict 'refs';
@@ -62,7 +65,7 @@ sub import {
     sub set_waft_backword_compatible_version {
         my ($class, $backword_compatible_version) = @_;
 
-        $class->croak('This is class method') if $class->is_blessed;
+        $class->die('This is class method') if $class->is_blessed;
 
         $Backword_compatible_version_of{$class}
             = $backword_compatible_version;
@@ -93,10 +96,10 @@ sub is_blessed {
     return $is_blessed;
 }
 
-sub croak {
-    my ($self, $error_message) = @_;
+sub die {
+    my ($self, @args) = @_;
 
-    $self->dont_trust_me( sub { Carp::croak($_[0]) }, $error_message );
+    $self->dont_trust_me( sub { CORE::die(@_) }, @args );
 
     return;
 }
@@ -104,22 +107,25 @@ sub croak {
 sub dont_trust_me {
     my ($self, $coderef, @args) = @_;
 
-    my $untrusted_class = ref $self || $self;
+    my $class = ref $self || $self;
 
-    *Waft::untrusted_class_ISA
-        = do { no strict 'refs'; \@{ "${untrusted_class}::ISA" } };
-    my @untrusted_class_ISA = @Waft::untrusted_class_ISA;
+    my $back = 0;
+    CALLER:
+    while ( my @caller = caller $back++ ) {
+        my ($package, $filename, $line) = @caller;
 
-    @Waft::untrusted_class_ISA = ();
-    local @CARP_NOT = (@CARP_NOT, 'NEXT'); # but trust NEXT
+        next CALLER if $package ne $class and $self->isa($package);
 
-    eval { $coderef->(@args) };
+        if ( not grep { defined and length >= 1 } @args ) {
+            push @args, q{something's wrong};
+        }
 
-    @Waft::untrusted_class_ISA = @untrusted_class_ISA;
+        push @args, " at $filename line $line.\n";
 
-    die $EVAL_ERROR if $EVAL_ERROR;
+        last CALLER;
+    }
 
-    return;
+    return $coderef->(@args);
 }
 
 sub use_utf8 {
@@ -136,7 +142,7 @@ sub use_utf8 {
     sub set_using_utf8 {
         my ($class, $using_utf8) = @_;
 
-        $class->croak('This is class method') if $class->is_blessed;
+        $class->die('This is class method') if $class->is_blessed;
 
         return if $using_utf8 and not $class->can_use_utf8;
 
@@ -165,15 +171,15 @@ sub can_use_utf8 {
 
     eval { require 5.008001 };
     return 1 if not $EVAL_ERROR;
-    $self->carp($EVAL_ERROR);
+    $self->warn($EVAL_ERROR);
 
     return;
 }
 
-sub carp {
-    my ($self, $error_message) = @_;
+sub warn {
+    my ($self, @args) = @_;
 
-    $self->dont_trust_me( sub { Carp::carp($_[0]) }, $error_message );
+    $self->dont_trust_me( sub { CORE::warn(@_) }, @args );
 
     return;
 }
@@ -184,7 +190,7 @@ sub carp {
     sub set_allow_template_file_exts {
         my ($class, @allow_template_file_exts) = @_;
 
-        $class->croak('This is class method') if $class->is_blessed;
+        $class->die('This is class method') if $class->is_blessed;
 
         $Allow_template_file_exts_arrayref_of{$class}
             = \@allow_template_file_exts;
@@ -220,7 +226,7 @@ sub carp {
     sub set_default_content_type {
         my ($class, $default_content_type) = @_;
 
-        $class->croak('This is class method') if $class->is_blessed;
+        $class->die('This is class method') if $class->is_blessed;
 
         $Default_content_type_of{$class} = $default_content_type;
 
@@ -459,7 +465,7 @@ sub create_query_obj {
         };
 
         if ($EVAL_ERROR) {
-            $self->carp($EVAL_ERROR);
+            $self->warn($EVAL_ERROR);
         }
         elsif ($query->VERSION < 3.31) {
             $query->charset('utf-8');
@@ -488,7 +494,7 @@ sub fix_and_validate_page {
            and not $untainted_page eq 'TEMPLATE'
            and not $self->to_page_id($untainted_page) =~ / __indirect \z/xms;
 
-    $self->carp(qq{Invalid requested page "$page"});
+    $self->warn(qq{Invalid requested page "$page"});
 
     return;
 }
@@ -530,7 +536,7 @@ sub initialize_values {
         @values = $self->unescape_space_percent_hyphen(@values);
 
         if ($key eq 'ALL_VALUES') {
-            $self->carp(q{Invalid init value 'ALL_VALUES'});
+            $self->warn(q{Invalid init value 'ALL_VALUES'});
 
             next KEY_VALUES_PAIR;
         }
@@ -632,7 +638,7 @@ sub find_first_action {
 
     return 'global__submit' if $self->can('global__submit');
 
-    $self->carp('Requested parameters do not match with defined action');
+    $self->warn('Requested parameters do not match with defined action');
 
     return;
 }
@@ -741,7 +747,7 @@ sub controller {
         last METHOD if $stash->{output};
     }
     continue {
-        $self->croak('Methods called too many times in controller')
+        $self->die('Methods called too many times in controller')
             if ++$call_count > 4;
     }
 
@@ -871,7 +877,7 @@ sub call_template {
     my ($template_file, $template_class) = $self->get_template_file($page);
 
     if ( not defined $template_file ) {
-        $self->carp(qq{Requested page "$page" is not found});
+        $self->warn(qq{Requested page "$page" is not found});
 
         my $goto_not_found_coderef = sub {
             my ($self, @args) = @_;
@@ -999,7 +1005,7 @@ sub is_allowed_to_use_template_file_ext {
 
         my @stat = stat $template_file;
         if ( not @stat ) {
-            $self->carp(qq{Failed to stat template file "$template_file"});
+            $self->warn(qq{Failed to stat template file "$template_file"});
 
             my $goto_internal_server_error_coderef = sub {
                 my ($self, @args) = @_;
@@ -1027,7 +1033,7 @@ sub is_allowed_to_use_template_file_ext {
 
         my $template_scalarref = $self->read_template_file($template_file);
         if ( not $template_scalarref ) {
-            $self->carp(qq{Failed to read template file "$template_file"});
+            $self->warn(qq{Failed to read template file "$template_file"});
 
             my $goto_forbidden_coderef = sub {
                 my ($self, @args) = @_;
@@ -1126,7 +1132,7 @@ sub compile_template {
 
     my $coderef = $self->compile(\$template);
 
-    $self->croak($EVAL_ERROR) if $EVAL_ERROR;
+    $self->die($EVAL_ERROR) if $EVAL_ERROR;
 
     return $coderef;
 }
@@ -1186,7 +1192,7 @@ sub join_values {
             KEY:
             for my $key ( @$keys_arrayref_or_key ) {
                 if ( not defined $key ) {
-                    $self->carp('Use of uninitialized value');
+                    $self->warn('Use of uninitialized value');
                     $key = q{};
                 }
 
@@ -1197,13 +1203,13 @@ sub join_values {
                 VALUE:
                 for my $value ( @values ) {
                     next VALUE if defined $value;
-                    $self->carp('Use of uninitialized value');
+                    $self->warn('Use of uninitialized value');
                     $value = q{};
                 }
 
                 @values = $self->escape_space_percent_hyphen(@values);
 
-                $joined_values{$key} = join '-', @values;
+                $joined_values{$key} = join q{}, map { "-$_" } @values;
             }
 
             next KEYS_ARRAYREF_OR_KEY;
@@ -1215,7 +1221,7 @@ sub join_values {
             $key = $keys_arrayref_or_key;
         }
         else {
-            $self->carp('Use of uninitialized value');
+            $self->warn('Use of uninitialized value');
             $key = q{};
         }
 
@@ -1226,7 +1232,7 @@ sub join_values {
                 = shift @keys_arrayref_or_key_value_pairs;
 
             if ( not defined $value_or_values_arrayref ) {
-                $self->carp('Use of uninitialized value');
+                $self->warn('Use of uninitialized value');
                 @values = (q{});
             }
             elsif (ref $value_or_values_arrayref eq 'ARRAY') {
@@ -1235,7 +1241,7 @@ sub join_values {
                 VALUE:
                 for my $value ( @values ) {
                     next VALUE if defined $value;
-                    $self->carp('Use of uninitialized value');
+                    $self->warn('Use of uninitialized value');
                     $value = q{};
                 }
             }
@@ -1244,20 +1250,20 @@ sub join_values {
             }
         }
         else {
-            $self->carp('Odd number of elements in arguments');
+            $self->warn('Odd number of elements in arguments');
             @values = (q{});
         }
 
         @values = $self->escape_space_percent_hyphen(@values);
 
-        $joined_values{$key} = join '-', @values;
+        $joined_values{$key} = join q{}, map { "-$_" } @values;
 
         next KEYS_ARRAYREF_OR_KEY;
     }
 
     my $joined_values
         = join q{ }, map { $self->escape_space_percent_hyphen($_)
-                           . '-' . $joined_values{$_}
+                           . $joined_values{$_}
                          } sort keys %joined_values;
 
     return $joined_values;
@@ -1395,7 +1401,7 @@ sub jsstr_escape {
     VALUE:
     for my $value (@values) {
         if ( not defined $value ) {
-            $self->carp('Use of uninitialized value');
+            $self->warn('Use of uninitialized value');
 
             next VALUE;
         }
@@ -1416,7 +1422,7 @@ sub text_filter {
     VALUE:
     for my $value ( @values ) {
         if ( not defined $value ) {
-            $self->carp('Use of uninitialized value');
+            $self->warn('Use of uninitialized value');
 
             next VALUE;
         }
@@ -1436,7 +1442,7 @@ sub expand_tabs {
     VALUE:
     for my $value (@values) {
         if ( not defined $value ) {
-            $self->carp('Use of uninitialized value');
+            $self->warn('Use of uninitialized value');
 
             next VALUE;
         }
@@ -1462,7 +1468,7 @@ sub html_escape {
     VALUE:
     for my $value (@values) {
         if ( not defined $value ) {
-            $self->carp('Use of uninitialized value');
+            $self->warn('Use of uninitialized value');
 
             next VALUE;
         }
@@ -1478,6 +1484,44 @@ sub html_escape {
 }
 
 sub word_filter { $_[0]->html_escape(@_[1 .. $#_]) }
+
+{
+    my %Next_coderef;
+
+    sub next {
+        my ($self) = @_;
+
+        my $class = ref $self || $self;
+        my $subroutine = ( caller(1) )[3];
+
+        goto $Next_coderef{$class, $subroutine}
+            if exists $Next_coderef{$class, $subroutine};
+
+        my ($caller, $method) = ( $subroutine =~ / (.+)::(.+) /xms );
+
+        my @super_classes = do{ no strict 'refs'; @{ "${class}::ISA" } };
+
+        if ($caller ne $class) {
+            1 while ( $caller ne shift @super_classes );
+        }
+
+        SUPER_CLASS:
+        for my $super_class ( @super_classes ) {
+            my $coderef  = do {
+                no strict 'refs';
+                *{ "${super_class}::$method" }{CODE}
+            };
+
+            next SUPER_CLASS if not $coderef;
+
+            $Next_coderef{$class, $subroutine} = $coderef;
+
+            goto $coderef;
+        }
+
+        return;
+    }
+}
 
 sub get_page_id {
     my ($self, $page) = @_;
@@ -1619,7 +1663,7 @@ sub url_encode {
     VALUE:
     for my $value ( @values ) {
         if ( not defined $value ) {
-            $self->carp('Use of uninitialized value');
+            $self->warn('Use of uninitialized value');
 
             next VALUE;
         }
@@ -1715,6 +1759,9 @@ sub include { $_[0]->call_template(@_[1 .. $#_]) }
 
         return if $Defined_subs_for_under_0_99x;
 
+        *croak = sub { $_[0]->die(@_[1 .. $#_]) };
+        *carp = sub { $_[0]->warn(@_[1 .. $#_]) };
+
         *init_base_url = sub { $_[0]->initialize_base_url(@_[1 .. $#_]) };
         *init_page = sub { $_[0]->initialize_page(@_[1 .. $#_]) };
         *init_values = sub { $_[0]->initialize_values(@_[1 .. $#_]) };
@@ -1809,9 +1856,6 @@ sub include { $_[0]->call_template(@_[1 .. $#_]) }
 
 package Waft::Object;
 
-use Carp;
-use English qw( -no_match_vars );
-
 sub TIEHASH {
 
     bless {};
@@ -1826,12 +1870,9 @@ sub STORE {
     }
 }
 
-sub warn_and_null () {
-
-    if ( $WARNING ) {
-        carp 'Use of uninitialized value';
-    }
-
+sub warn_and_null {
+    require Carp;
+    Carp::carp('Use of uninitialized value');
     q{};
 }
 
