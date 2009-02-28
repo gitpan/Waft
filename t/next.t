@@ -5,7 +5,7 @@ BEGIN { plan tests => 2 * 2 };
 use strict;
 BEGIN { eval { require warnings } ? 'warnings'->import : ( $^W = 1 ) }
 
-use lib 't';
+use lib 't/next';
 use Waft with => qw( ::Test::Next1 ::Test::Next2 ::Test::Next3 );
 
 sub html_escape {

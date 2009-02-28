@@ -28,7 +28,7 @@ sub new {
 sub DESTROY {
     my ($duplicate) = @_;
 
-    open STDERR, '<&=' . fileno $duplicate
+    open STDERR, '>&=' . fileno $duplicate
         or croak 'Failed to return STDERR';
 
     unlink 't/STDERR.test';

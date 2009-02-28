@@ -73,7 +73,7 @@ my $filtered = << 'END_OF_FILTERED';
 /\<>
 </p>
 <p>
- &nbsp; &nbsp; &nbsp; &nbsp;<br />
+&nbsp; &nbsp; &nbsp; &nbsp; <br />
 
 <br />&quot;
 &amp;&#39;

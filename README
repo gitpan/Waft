@@ -1,4 +1,4 @@
-Waft version 0.9907
+Waft version 0.9908
 ===================
 
 INSTALLATION
@@ -12,7 +12,7 @@ To install this module type the following:
 
 COPYRIGHT AND LICENCE
 
-Copyright (C) 2007, 2008 by Yuji Tamashiro
+Copyright (C) 2007-2009 by Yuji Tamashiro
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself.

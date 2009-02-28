@@ -11,8 +11,7 @@ use Fcntl qw( :DEFAULT );
 use Symbol;
 require File::Spec;
 
-$VERSION = '0.9907';
-$VERSION = eval $VERSION;
+$VERSION = '0.9908';
 
 $Waft::Backword_compatible_version = $VERSION;
 @Waft::Allow_template_file_exts = qw( .html .css .js .txt );
@@ -1429,8 +1428,9 @@ sub text_filter {
 
         $value = $self->expand_tabs($value);
         $value = $self->html_escape($value);
-        $value =~ s{ (\s) \x20                 }{$1&nbsp;}gxms;
         $value =~ s{ ( \x0D\x0A | [\x0A\x0D] ) }{<br />$1}gxms;
+        $value =~ s{\A \x20 }{&nbsp;}gxms;
+        $value =~ s{ (\s) \x20 }{$1&nbsp;}gxms;
     }
 
     return wantarray ? @values : $values[0];
@@ -1486,41 +1486,66 @@ sub html_escape {
 sub word_filter { $_[0]->html_escape(@_[1 .. $#_]) }
 
 {
-    my %Next_coderef;
+    my $FIND_NEXT_CODEREF;
 
     sub next {
         my ($self) = @_;
 
-        my $class = ref $self || $self;
         my $subroutine = ( caller(1) )[3];
+        my ($caller, $method) = $subroutine =~ / (.+) :: (.+) /xms;
 
-        goto $Next_coderef{$class, $subroutine}
-            if exists $Next_coderef{$class, $subroutine};
+        my $start = !$Waft::Next_base_of{$method}
+                    || ( caller(2) )[3] ne ( caller(0) )[3];
 
-        my ($caller, $method) = ( $subroutine =~ / (.+)::(.+) /xms );
+        local $Waft::Next_base_of{$method} = $caller if $start;
+        local $Waft::Next_progress_of{$method}
+            = $Waft::Next_progress_of{$method};
 
-        my @super_classes = do{ no strict 'refs'; @{ "${class}::ISA" } };
+        my $next_coderef = $self->$FIND_NEXT_CODEREF(
+            $Waft::Next_base_of{$method}
+            , $method
+            , $Waft::Next_progress_of{$method}++ || 0
+        );
 
-        if ($caller ne $class) {
-            1 while ( $caller ne shift @super_classes );
-        }
+        return if not $next_coderef;
 
-        SUPER_CLASS:
-        for my $super_class ( @super_classes ) {
-            my $coderef  = do {
-                no strict 'refs';
-                *{ "${super_class}::$method" }{CODE}
-            };
-
-            next SUPER_CLASS if not $coderef;
-
-            $Next_coderef{$class, $subroutine} = $coderef;
-
-            goto $coderef;
-        }
-
-        return;
+        return $next_coderef->(@_);
     }
+
+    my %Cached_next_coderefs;
+
+    $FIND_NEXT_CODEREF = sub {
+        my ($self, $base, $method, $progress) = @_;
+
+        my $class = ref $self || $self;
+
+        return $Cached_next_coderefs{$class, $base, $method}->[$progress]
+            if $Waft::Cache
+               and exists $Cached_next_coderefs{$class, $base, $method};
+
+        my @next_classes;
+
+        my @classes = ($class);
+        while ( my $class = shift @classes ) {
+            push @next_classes, $class;
+
+            no strict 'refs';
+            unshift @classes, @{ "${class}::ISA" };
+        }
+
+        while ( $base ne shift @next_classes ) {
+            return if @next_classes == 0;
+        }
+
+        my @next_coderefs = do {
+            no strict 'refs';
+            grep { $_ } map { *{ "${_}::$method" }{CODE} } @next_classes;
+        };
+
+        $Cached_next_coderefs{$class, $base, $method} = \@next_coderefs;
+
+        return $next_coderefs[$progress];
+    };
 }
 
 sub get_page_id {
@@ -1759,18 +1784,23 @@ sub include { $_[0]->call_template(@_[1 .. $#_]) }
 
         return if $Defined_subs_for_under_0_99x;
 
-        *croak = sub { $_[0]->die(@_[1 .. $#_]) };
-        *carp = sub { $_[0]->warn(@_[1 .. $#_]) };
+        *croak = *croak = sub { $_[0]->die(@_[1 .. $#_]) };
+        *carp = *carp = sub { $_[0]->warn(@_[1 .. $#_]) };
 
-        *init_base_url = sub { $_[0]->initialize_base_url(@_[1 .. $#_]) };
-        *init_page = sub { $_[0]->initialize_page(@_[1 .. $#_]) };
-        *init_values = sub { $_[0]->initialize_values(@_[1 .. $#_]) };
-        *init_action = sub { $_[0]->initialize_action(@_[1 .. $#_]) };
-        *init_response_headers
+        *init_base_url = *init_base_url
+            = sub { $_[0]->initialize_base_url(@_[1 .. $#_]) };
+        *init_page = *init_page
+            = sub { $_[0]->initialize_page(@_[1 .. $#_]) };
+        *init_values = *init_values
+            = sub { $_[0]->initialize_values(@_[1 .. $#_]) };
+        *init_action = *init_action
+            = sub { $_[0]->initialize_action(@_[1 .. $#_]) };
+        *init_response_headers = *init_response_headers
             = sub { $_[0]->initialize_response_headers(@_[1 .. $#_]) };
-        *init_binmode = sub { $_[0]->initialize_binmode(@_[1 .. $#_]) };
+        *init_binmode = *init_binmode
+            = sub { $_[0]->initialize_binmode(@_[1 .. $#_]) };
 
-        *expand = sub { Waft->expand_tabs(@_) };
+        *expand = *expand = sub { Waft->expand_tabs(@_) };
 
         $Defined_subs_for_under_0_99x = 1;
 
@@ -2275,7 +2305,7 @@ Yuji Tamashiro, E<lt>yuji@tamashiro.orgE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2007, 2008 by Yuji Tamashiro
+Copyright (C) 2007-2009 by Yuji Tamashiro
 
 This library is free software; you can redistribute it and/or modify it under
 the same terms as Perl itself.
