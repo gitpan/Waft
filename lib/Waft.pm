@@ -6,12 +6,11 @@ use vars qw( $VERSION );
 BEGIN { eval { require warnings } ? 'warnings'->import : ( $^W = 1 ) }
 
 use CGI qw( -no_debug );
-use English qw( -no_match_vars );
 use Fcntl qw( :DEFAULT );
 use Symbol;
 require File::Spec;
 
-$VERSION = '0.9908';
+$VERSION = '0.9909';
 
 $Waft::Backword_compatible_version = $VERSION;
 @Waft::Allow_template_file_exts = qw( .html .css .js .txt );
@@ -40,14 +39,13 @@ sub import {
 
         eval qq{ require $base };
 
-        if ( $EVAL_ERROR ) {
-            CORE::die($EVAL_ERROR)
-                if $EVAL_ERROR !~ /\ACan't locate .*? at \(eval /;
+        if ( $@ ) {
+            CORE::die($@) if $@ !~ /\ACan't locate .*? at \(eval /;
 
             if ( not do { no strict 'refs'; %{ "${base}::" } } ) {
                 require Carp;
 
-                Carp::croak($EVAL_ERROR);
+                Carp::croak($@);
             }
         }
 
@@ -169,8 +167,8 @@ sub can_use_utf8 {
     my ($self) = @_;
 
     eval { require 5.008001 };
-    return 1 if not $EVAL_ERROR;
-    $self->warn($EVAL_ERROR);
+    return 1 if not $@;
+    $self->warn($@);
 
     return;
 }
@@ -463,8 +461,8 @@ sub create_query_obj {
             use CGI 3.21 qw( -utf8 ); # -utf8 pragma is for 3.31 or later
         };
 
-        if ($EVAL_ERROR) {
-            $self->warn($EVAL_ERROR);
+        if ($@) {
+            $self->warn($@);
         }
         elsif ($query->VERSION < 3.31) {
             $query->charset('utf-8');
@@ -648,7 +646,7 @@ sub get_page {
     return $self->stash->{page};
 }
 
-sub page { $_[0]->get_page(@_[1 .. $#_]) }
+sub page { shift->get_page(@_) }
 
 sub to_action_id {
     my ($self, $action) = @_;
@@ -715,23 +713,23 @@ sub controller {
     my $stash = $self->stash;
     my $call_count = 0;
     METHOD:
-    while ( not $stash->{output} ) {
+    while ( not $stash->{responded} ) {
         if ( my $coderef = $self->can('before') ) {
             @relays = $self->call_method($coderef, @relays);
 
-            last METHOD if $stash->{output};
+            last METHOD if $stash->{responded};
         }
 
         if ( my $coderef = $self->find_action_method ) {
             @relays = $self->call_method($coderef, @relays);
 
-            last METHOD if $stash->{output};
+            last METHOD if $stash->{responded};
 
             if ($self->BCV < 0.53) {
                 if ( $self->to_action_id($self->get_action) eq 'template' ) {
                     @relays = $self->call_template('CURRENT', @relays);
 
-                    last METHOD if $stash->{output};
+                    last METHOD if $stash->{responded};
                 }
             }
 
@@ -743,7 +741,7 @@ sub controller {
 
         @relays = $self->call_template('CURRENT', @relays);
 
-        last METHOD if $stash->{output};
+        last METHOD if $stash->{responded};
     }
     continue {
         $self->die('Methods called too many times in controller')
@@ -767,7 +765,7 @@ sub call_method {
     my @return_values = $self->$method_coderef(@args);
 
     return wantarray ? @return_values : $return_values[0]
-        if $self->stash->{output};
+        if $self->stash->{responded};
 
     require B;
     my $method_name = B::svref_2object($method_coderef)->GV->NAME;
@@ -860,7 +858,7 @@ sub get_action {
     return $self->stash->{action};
 }
 
-sub action { $_[0]->get_action(@_[1 .. $#_]) }
+sub action { shift->get_action(@_) }
 
 sub call_template {
     my ($self, $page, @args) = @_;
@@ -1131,7 +1129,7 @@ sub compile_template {
 
     my $coderef = $self->compile(\$template);
 
-    $self->die($EVAL_ERROR) if $EVAL_ERROR;
+    $self->die($@) if $@;
 
     return $coderef;
 }
@@ -1145,7 +1143,7 @@ sub insert_output_waft_tags_method {
         | form_elements                       # deprecated
     ) \b }xms;
 
-    $form_block =~ s{ (?= < (?: input | select | textarea ) \b ) }
+    $form_block =~ s{ (?= < (?: input | select | textarea | label ) \b ) }
                     {<% \$Waft::Self->output_waft_tags('ALL_VALUES'); %>}ixms;
 
     return $form_block;
@@ -1177,6 +1175,7 @@ sub join_values {
 
     my %joined_values;
 
+    my $value_hashref = $self->value_hashref;
     KEYS_ARRAYREF_OR_KEY:
     while ( @keys_arrayref_or_key_value_pairs ) {
         my $keys_arrayref_or_key = shift @keys_arrayref_or_key_value_pairs;
@@ -1184,7 +1183,7 @@ sub join_values {
         if ( defined $keys_arrayref_or_key
              and $keys_arrayref_or_key eq 'ALL_VALUES'
         ) {
-            $keys_arrayref_or_key = $self->keys_arrayref;
+            $keys_arrayref_or_key = [ keys %$value_hashref ];
         }
 
         if (ref $keys_arrayref_or_key eq 'ARRAY') {
@@ -1195,7 +1194,7 @@ sub join_values {
                     $key = q{};
                 }
 
-                next KEY if not $self->exists_key($key);
+                next KEY if not exists $value_hashref->{$key};
 
                 my @values = $self->get_values($key);
 
@@ -1268,18 +1267,6 @@ sub join_values {
     return $joined_values;
 }
 
-sub keys_arrayref {
-    my ($self) = @_;
-
-    return [ keys %{ $self->value_hashref } ];
-}
-
-sub exists_key {
-    my ($self, $key) = @_;
-
-    return exists $self->value_hashref->{$key};
-}
-
 {
     my @EMPTY;
 
@@ -1334,25 +1321,24 @@ sub convert_text_part {
 {
     package Waft::compile;
 
-    sub Waft::compile {
-
-        return eval ${ $_[1] };
-    }
+    sub Waft::compile { eval ${ $_[1] } }
 }
 
-sub output {
-    my ($self, @strings) = @_;
+{
+    my $OUTPUT_CONTENT_CODEREF;
 
-    if ( not $self->stash->{output} ) {
-        $self->output_response_headers;
-        $self->stash->{output} = 1;
+    sub output {
+        ( $_[0]->stash->{output} ||= do {
+            my ($self) = @_;
+
+            $self->output_response_headers;
+            $self->stash->{responded} = 1;
+
+            $OUTPUT_CONTENT_CODEREF;
+        } )->(@_);
     }
 
-    return if not @strings;
-
-    print @strings;
-
-    return;
+    $OUTPUT_CONTENT_CODEREF = sub { shift; print @_ if @_; return };
 }
 
 sub output_response_headers {
@@ -1392,7 +1378,28 @@ sub get_response_headers {
     return @{ $self->stash->{response_headers} }
 }
 
-sub jsstr_filter { $_[0]->jsstr_escape(@_[1 .. $#_]) }
+{
+    my $BUFFER_CONTENT_CODEREF;
+
+    sub get_content {
+        my ($self, $part_of_template_coderef, @args) = @_;
+
+        my $stash = $self->stash;
+
+        push @{ $stash->{contents} }, q{};
+
+        local $stash->{output} = $BUFFER_CONTENT_CODEREF
+            if @{ $stash->{contents} } == 1;
+        $self->$part_of_template_coderef(@args);
+
+        return pop @{ $stash->{contents} };
+    }
+
+    $BUFFER_CONTENT_CODEREF
+        = sub { shift->stash->{contents}->[-1] .= join q{}, @_; return };
+}
+
+sub jsstr_filter { shift->jsstr_escape(@_) }
 
 sub jsstr_escape {
     my ($self, @values) = @_;
@@ -1483,7 +1490,7 @@ sub html_escape {
     return wantarray ? @values : $values[0];
 }
 
-sub word_filter { $_[0]->html_escape(@_[1 .. $#_]) }
+sub word_filter { shift->html_escape(@_) }
 
 {
     my $FIND_NEXT_CODEREF;
@@ -1491,11 +1498,12 @@ sub word_filter { $_[0]->html_escape(@_[1 .. $#_]) }
     sub next {
         my ($self) = @_;
 
-        my $subroutine = ( caller(1) )[3];
+        my ($back, $subroutine);
+        1 while ( ( $subroutine = ( caller ++$back )[3] ) eq '(eval)' );
         my ($caller, $method) = $subroutine =~ / (.+) :: (.+) /xms;
 
         my $start = !$Waft::Next_base_of{$method}
-                    || ( caller(2) )[3] ne ( caller(0) )[3];
+                    || ( caller $back + 1 )[3] ne ( caller 0 )[3];
 
         local $Waft::Next_base_of{$method} = $caller if $start;
         local $Waft::Next_progress_of{$method}
@@ -1560,7 +1568,7 @@ sub get_page_id {
     return $page_id;
 }
 
-sub page_id { $_[0]->get_page_id(@_[1 .. $#_]) }
+sub page_id { shift->get_page_id(@_) }
 
 sub set_value {
     my ($self, $key, $value) = @_;
@@ -1599,8 +1607,8 @@ sub add_response_header {
     return;
 }
 
-sub add_header { $_[0]->add_response_header(@_[1 .. $#_]) }
-sub header     { $_[0]->add_response_header(@_[1 .. $#_]) }
+sub add_header { shift->add_response_header(@_) }
+sub header     { shift->add_response_header(@_) }
 
 sub make_url {
     my ($self, $page, @keys_arrayref_or_key_value_pairs) = @_;
@@ -1613,7 +1621,7 @@ sub make_url {
     return $self->get_base_url . '?' . $query_string;
 }
 
-sub url { $_[0]->make_url(@_[1 .. $#_]) }
+sub url { shift->make_url(@_) }
 
 sub make_absolute_url {
     my ($self, @args) = @_;
@@ -1644,12 +1652,13 @@ sub make_absolute_url {
         $base_url .= $ENV{SCRIPT_NAME};
     }
 
-    local $Waft::Base_url = $base_url;
+    local $self->stash->{url} = $base_url if $self->BCV < 0.53;
+    local $self->stash->{base_url} = $base_url;
 
     return $self->make_url(@args);
 }
 
-sub absolute_url { $_[0]->make_absolute_url(@_[1 .. $#_]) }
+sub absolute_url { shift->make_absolute_url(@_) }
 
 sub make_query_string {
     my ($self, $page, @keys_arrayref_or_key_value_pairs) = @_;
@@ -1707,7 +1716,7 @@ sub url_encode {
 sub get_base_url {
     my ($self) = @_;
 
-    return $Waft::Base_url if defined $Waft::Base_url;
+    return $Waft::Base_url if defined $Waft::Base_url and $self->BCV < 1.0;
 
     return $self->stash->{url} if $self->BCV < 0.53;
 
@@ -1775,7 +1784,7 @@ sub __internal_server_error__indirect {
     return @args;
 }
 
-sub include { $_[0]->call_template(@_[1 .. $#_]) }
+sub include { shift->call_template(@_) }
 
 {
     my $Defined_subs_for_under_0_99x;
@@ -1784,21 +1793,27 @@ sub include { $_[0]->call_template(@_[1 .. $#_]) }
 
         return if $Defined_subs_for_under_0_99x;
 
-        *croak = *croak = sub { $_[0]->die(@_[1 .. $#_]) };
-        *carp = *carp = sub { $_[0]->warn(@_[1 .. $#_]) };
+        *croak = *croak = sub { shift->die(@_) };
+        *carp = *carp = sub { shift->warn(@_) };
 
         *init_base_url = *init_base_url
-            = sub { $_[0]->initialize_base_url(@_[1 .. $#_]) };
+            = sub { shift->initialize_base_url(@_) };
         *init_page = *init_page
-            = sub { $_[0]->initialize_page(@_[1 .. $#_]) };
+            = sub { shift->initialize_page(@_) };
         *init_values = *init_values
-            = sub { $_[0]->initialize_values(@_[1 .. $#_]) };
+            = sub { shift->initialize_values(@_) };
         *init_action = *init_action
-            = sub { $_[0]->initialize_action(@_[1 .. $#_]) };
+            = sub { shift->initialize_action(@_) };
         *init_response_headers = *init_response_headers
-            = sub { $_[0]->initialize_response_headers(@_[1 .. $#_]) };
+            = sub { shift->initialize_response_headers(@_) };
         *init_binmode = *init_binmode
-            = sub { $_[0]->initialize_binmode(@_[1 .. $#_]) };
+            = sub { shift->initialize_binmode(@_) };
+
+        *keys_arrayref = *keys_arrayref
+            = sub { [ keys %{ $_[0]->value_hashref } ] };
+
+        *exists_key = *exists_key
+            = sub { exists $_[0]->value_hashref->{ $_[1] } };
 
         *expand = *expand = sub { Waft->expand_tabs(@_) };
 
