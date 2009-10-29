@@ -10,7 +10,7 @@ use Fcntl qw( :DEFAULT );
 use Symbol;
 require File::Spec;
 
-$VERSION = '0.9909';
+$VERSION = '0.9910';
 
 $Waft::Backword_compatible_version = $VERSION;
 @Waft::Allow_template_file_exts = qw( .html .css .js .txt );
@@ -62,7 +62,7 @@ sub import {
     sub set_waft_backword_compatible_version {
         my ($class, $backword_compatible_version) = @_;
 
-        $class->die('This is class method') if $class->is_blessed;
+        $class->die('This is class method') if $class->blessed;
 
         $Backword_compatible_version_of{$class}
             = $backword_compatible_version;
@@ -70,10 +70,10 @@ sub import {
         return;
     }
 
-    sub get_waft_backword_compatible_version {
+    sub BCV {
         my ($self) = @_;
 
-        my $class = ref $self || $self;
+        my $class = $self->blessed || $self;
 
         my $backword_compatible_version
             = $Backword_compatible_version_of{$class}
@@ -83,15 +83,31 @@ sub import {
     }
 }
 
-*BCV = *BCV = \&get_waft_backword_compatible_version;
+sub get_waft_backword_compatible_version { shift->BCV(@_) }
 
-sub is_blessed {
-    my ($self) = @_;
+eval q{ use Scalar::Util qw( blessed refaddr ); 1 } or do {
+    *blessed = *blessed = sub {
+        my ($self) = @_;
 
-    my $is_blessed = ref $self;
+        my $blessed = ref $self;
 
-    return $is_blessed;
-}
+        return $blessed;
+    };
+
+    *refaddr = *refaddr = sub {
+        my ($self) = @_;
+
+        my $blessed_class = ref $self
+            or return;
+
+        bless $self, __PACKAGE__;
+        my $refaddr = "$self";
+
+        bless $self, $blessed_class;
+
+        return $refaddr;
+    };
+};
 
 sub die {
     my ($self, @args) = @_;
@@ -104,9 +120,9 @@ sub die {
 sub dont_trust_me {
     my ($self, $coderef, @args) = @_;
 
-    my $class = ref $self || $self;
+    my $class = $self->blessed || $self;
 
-    my $back = 0;
+    my $back;
     CALLER:
     while ( my @caller = caller $back++ ) {
         my ($package, $filename, $line) = @caller;
@@ -139,7 +155,7 @@ sub use_utf8 {
     sub set_using_utf8 {
         my ($class, $using_utf8) = @_;
 
-        $class->die('This is class method') if $class->is_blessed;
+        $class->die('This is class method') if $class->blessed;
 
         return if $using_utf8 and not $class->can_use_utf8;
 
@@ -152,10 +168,10 @@ sub use_utf8 {
         my ($self) = @_;
 
         if ($self->BCV < 0.53) {
-            return $self->stash->{use_utf8} if $self->is_blessed;
+            return $self->stash->{use_utf8} if $self->blessed;
         }
 
-        my $class = ref $self || $self;
+        my $class = $self->blessed || $self;
 
         my $using_utf8 = $Using_utf8{$class};
 
@@ -187,7 +203,7 @@ sub warn {
     sub set_allow_template_file_exts {
         my ($class, @allow_template_file_exts) = @_;
 
-        $class->die('This is class method') if $class->is_blessed;
+        $class->die('This is class method') if $class->blessed;
 
         $Allow_template_file_exts_arrayref_of{$class}
             = \@allow_template_file_exts;
@@ -196,7 +212,7 @@ sub warn {
     }
 
     sub get_allow_template_file_exts {
-        my ($class) = ( $_[1] || $_[0] );
+        my $class = $_[1] || $_[0];
 
         return @{ $Allow_template_file_exts_arrayref_of{$class} }
             if exists $Allow_template_file_exts_arrayref_of{$class};
@@ -223,7 +239,7 @@ sub warn {
     sub set_default_content_type {
         my ($class, $default_content_type) = @_;
 
-        $class->die('This is class method') if $class->is_blessed;
+        $class->die('This is class method') if $class->blessed;
 
         $Default_content_type_of{$class} = $default_content_type;
 
@@ -233,7 +249,7 @@ sub warn {
     sub get_default_content_type {
         my ($self) = @_;
 
-        my $class = ref $self || $self;
+        my $class = $self->blessed || $self;
 
         my $default_content_type = $Default_content_type_of{$class}
                                    || 'text/html';
@@ -246,7 +262,7 @@ sub waft {
     my ($self, @args) = @_;
 
     if ($self->BCV < 0.53) {
-        if ( not $self->is_blessed ) {
+        if ( not $self->blessed ) {
             ($self, @args) = $self->new(@args);
         }
 
@@ -255,7 +271,7 @@ sub waft {
         $self->_load_query_param;
     }
 
-    if ( not $self->is_blessed ) {
+    if ( not $self->blessed ) {
         $self = $self->new->initialize;
     }
 
@@ -266,6 +282,8 @@ sub waft {
 
 sub new {
     my ($class) = @_;
+
+    $class->die('This is class method') if $class->blessed;
 
     my $self;
     tie %$self, 'Waft::Object';
@@ -383,40 +401,18 @@ sub set_base_url {
 }
 
 {
-    my %Stashes;
+    my %Stash;
 
-    sub stash {
-        my ($self, $class) = @_;
-
-        my $ident = $self->ident;
-        $class ||= caller;
-
-        my $stash_hashref = ( $Stashes{$ident}{$class} ||= {} );
-
-        return $stash_hashref;
-    }
+    sub stash { $Stash{ $_[0]->refaddr or $_[0] }{ $_[1] or caller } ||= {} }
 
     sub DESTROY {
         my ($self) = @_;
 
-        my $ident = $self->ident;
-        delete $Stashes{$ident};
+        my $ident = $self->refaddr;
+        delete $Stash{$ident};
 
         return;
     }
-}
-
-sub ident {
-    my ($self) = @_;
-
-    my $blessed_class = ref $self;
-
-    bless $self, __PACKAGE__;
-    my $ident = "$self";
-
-    bless $self, $blessed_class;
-
-    return $ident;
 }
 
 sub initialize_page {
@@ -497,7 +493,7 @@ sub fix_and_validate_page {
 }
 
 sub to_page_id {
-    my ($self, $page) = @_;
+    my (undef, $page) = @_;
 
     my $page_id = $page;
     $page_id =~ s{ \.[^/:\\]* \z}{}xms;
@@ -552,14 +548,10 @@ sub clear_values {
     return;
 }
 
-sub value_hashref {
-    my ($self) = @_;
-
-    return tied %$self;
-}
+sub value_hashref { tied %{ $_[0] } }
 
 sub unescape_space_percent_hyphen {
-    my ($self, @values) = @_;
+    my (undef, @values) = @_;
 
     for my $value (@values) {
         $value =~ s/ %(2[05d]) / pack 'H2', $1 /egxms;
@@ -640,16 +632,12 @@ sub find_first_action {
     return;
 }
 
-sub get_page {
-    my ($self) = @_;
-
-    return $self->stash->{page};
-}
+sub get_page { $_[0]->stash->{page} }
 
 sub page { shift->get_page(@_) }
 
 sub to_action_id {
-    my ($self, $action) = @_;
+    my (undef, $action) = @_;
 
     my $action_id = $action;
     $action_id =~ s/ \. .* \z//xms;
@@ -711,7 +699,7 @@ sub controller {
     }
 
     my $stash = $self->stash;
-    my $call_count = 0;
+    my $call_count;
     METHOD:
     while ( not $stash->{responded} ) {
         if ( my $coderef = $self->can('before') ) {
@@ -852,11 +840,7 @@ sub find_action_method {
     return $self->can("__${page_id}__$action_id");
 }
 
-sub get_action {
-    my ($self) = @_;
-
-    return $self->stash->{action};
-}
+sub get_action { $_[0]->stash->{action} }
 
 sub action { shift->get_action(@_) }
 
@@ -876,11 +860,7 @@ sub call_template {
     if ( not defined $template_file ) {
         $self->warn(qq{Requested page "$page" is not found});
 
-        my $goto_not_found_coderef = sub {
-            my ($self, @args) = @_;
-
-            return 'not_found.html', @args;
-        };
+        my $goto_not_found_coderef = sub { shift; 'not_found.html', @_ };
 
         return $self->call_method($goto_not_found_coderef, @args);
     }
@@ -890,6 +870,8 @@ sub call_template {
 
     return $self->call_method($template_coderef, @args);
 }
+
+sub include { shift->call_template(@_) }
 
 sub get_template_file {
     my ($self, $page) = @_;
@@ -902,7 +884,7 @@ sub get_template_file {
         return if not -f $page;
 
         my $template_file = $page;
-        my $template_class = ref $self || $self;
+        my $template_class = $self->blessed || $self;
 
         return $template_file, $template_class;
     }
@@ -916,7 +898,7 @@ sub get_template_file {
     sub find_template_file {
         my ($self, $page) = @_;
 
-        my $class = ref $self || $self;
+        my $class = $self->blessed || $self;
 
         return @{ $Cached_template_file{$class, $page} }
             if $Waft::Cache and exists $Cached_template_file{$class, $page};
@@ -1004,11 +986,8 @@ sub is_allowed_to_use_template_file_ext {
         if ( not @stat ) {
             $self->warn(qq{Failed to stat template file "$template_file"});
 
-            my $goto_internal_server_error_coderef = sub {
-                my ($self, @args) = @_;
-
-                return 'internal_server_error.html', @args;
-            };
+            my $goto_internal_server_error_coderef
+                = sub { shift; 'internal_server_error.html', @_ };
 
             return $goto_internal_server_error_coderef;
         }
@@ -1032,11 +1011,7 @@ sub is_allowed_to_use_template_file_ext {
         if ( not $template_scalarref ) {
             $self->warn(qq{Failed to read template file "$template_file"});
 
-            my $goto_forbidden_coderef = sub {
-                my ($self, @args) = @_;
-
-                return 'forbidden.html', @args;
-            };
+            my $goto_forbidden_coderef = sub { shift; 'forbidden.html', @_ };
 
             return $goto_forbidden_coderef;
         }
@@ -1089,33 +1064,34 @@ sub compile_template {
                     =[A-Za-z]
                 )
                 \s* j(?:sstr)? \s* = (.*?)
-             %>}{\$Waft::Self->output( \$Waft::Self->jsstr_filter($1) );}gxms;
+             %>}{\$__self->output( \$__self->jsstr_filter($1) );}gxms;
 
     $template
         =~ s{<% (?! \s*[\x0A\x0D]
                     =[A-Za-z]
                 )
                 \s* p(?:lain)? \s* = (.*?)
-             %>}{\$Waft::Self->output($1);}gxms;
+             %>}{\$__self->output($1);}gxms;
 
     $template
         =~ s{<% (?! \s*[\x0A\x0D]
                     =[A-Za-z]
                 )
                 \s* t(?:ext)? \s* = (.*?)
-             %>}{\$Waft::Self->output( \$Waft::Self->text_filter($1) );}gxms;
+             %>}{\$__self->output( \$__self->text_filter($1) );}gxms;
 
     $template
         =~ s{<% (?! \s*[\x0A\x0D]
                     =[A-Za-z]
                 )
                 \s* (?: w(?:ord)? \s* )? = (.*?)
-             %>}{\$Waft::Self->output( \$Waft::Self->word_filter($1) );}gxms;
+             %>}{\$__self->output( \$__self->word_filter($1) );}gxms;
 
     $template =~ s/ %> | <% //gxms;
 
     $template = 'return sub {'
-                .     'local $Waft::Self = $_[0];'
+                . ( $self->BCV < 1.0 ? 'local $Waft::Self = $_[0];' : q{} )
+                .     'my $__self = $_[0];'
                 .     $template
                 . '}';
 
@@ -1144,7 +1120,7 @@ sub insert_output_waft_tags_method {
     ) \b }xms;
 
     $form_block =~ s{ (?= < (?: input | select | textarea | label ) \b ) }
-                    {<% \$Waft::Self->output_waft_tags('ALL_VALUES'); %>}ixms;
+                    {<% \$__self->output_waft_tags('ALL_VALUES'); %>}ixms;
 
     return $form_block;
 }
@@ -1280,7 +1256,7 @@ sub join_values {
 }
 
 sub escape_space_percent_hyphen {
-    my ($self, @values) = @_;
+    my (undef, @values) = @_;
 
     for my $value (@values) {
         $value =~ s/ ( [ %-] ) / '%' . unpack('H2', $1) /egxms;
@@ -1290,14 +1266,14 @@ sub escape_space_percent_hyphen {
 }
 
 sub convert_text_part {
-    my ($self, $text_part, $break) = @_;
+    my (undef, $text_part, $break) = @_;
 
     if ($text_part =~ / ([^\x0A\x0D]*) ( [\x0A\x0D] .* ) /xms) {
         my ($first_line, $after_first_break) = ($1, $2);
 
         if (length $first_line > 0) {
             $first_line =~ s/ ( ['\\] ) /\\$1/gxms;
-            $first_line = q{$Waft::Self->output('} . $first_line . q{');};
+            $first_line = q{$__self->output('} . $first_line . q{');};
         }
 
         $after_first_break =~ s/ ( ["\$\@\\] ) /\\$1/gxms;
@@ -1310,12 +1286,12 @@ sub convert_text_part {
         );
 
         return $first_line . $break
-               . qq{\$Waft::Self->output("$after_first_break");$breaks};
+               . qq{\$__self->output("$after_first_break");$breaks};
     }
 
     $text_part =~ s/ ( ['\\] ) /\\$1/gxms;
 
-    return q{$Waft::Self->output('} . $text_part . q{');};
+    return q{$__self->output('} . $text_part . q{');};
 }
 
 {
@@ -1382,7 +1358,7 @@ sub get_response_headers {
     my $BUFFER_CONTENT_CODEREF;
 
     sub get_content {
-        my ($self, $part_of_template_coderef, @args) = @_;
+        my ($self, $coderef, @args) = @_;
 
         my $stash = $self->stash;
 
@@ -1390,8 +1366,9 @@ sub get_response_headers {
 
         local $stash->{output} = $BUFFER_CONTENT_CODEREF
             if @{ $stash->{contents} } == 1;
-        $self->$part_of_template_coderef(@args);
+        my @return_values = $self->$coderef(@args);
 
+        return pop @{ $stash->{contents} }, @return_values if wantarray;
         return pop @{ $stash->{contents} };
     }
 
@@ -1493,7 +1470,7 @@ sub html_escape {
 sub word_filter { shift->html_escape(@_) }
 
 {
-    my $FIND_NEXT_CODEREF;
+    my (%Start, %Progress, $FIND_NEXT_CODEREF);
 
     sub next {
         my ($self) = @_;
@@ -1502,17 +1479,18 @@ sub word_filter { shift->html_escape(@_) }
         1 while ( ( $subroutine = ( caller ++$back )[3] ) eq '(eval)' );
         my ($caller, $method) = $subroutine =~ / (.+) :: (.+) /xms;
 
-        my $start = !$Waft::Next_base_of{$method}
-                    || ( caller $back + 1 )[3] ne ( caller 0 )[3];
+        my $ident = $self->refaddr || $self;
 
-        local $Waft::Next_base_of{$method} = $caller if $start;
-        local $Waft::Next_progress_of{$method}
-            = $Waft::Next_progress_of{$method};
+        local $Start{ $ident, $method } = $caller
+            if not $Start{ $ident, $method }
+               or ( caller $back + 1 )[3] ne ( caller 0 )[3];
+        local $Progress{ $ident, $method, $Start{ $ident, $method } }
+            = $Progress{ $ident, $method, $Start{ $ident, $method } };
 
         my $next_coderef = $self->$FIND_NEXT_CODEREF(
-            $Waft::Next_base_of{$method}
-            , $method
-            , $Waft::Next_progress_of{$method}++ || 0
+            $method
+            , $Start{ $ident, $method }
+            , $Progress{ $ident, $method, $Start{ $ident, $method } }++
         );
 
         return if not $next_coderef;
@@ -1523,13 +1501,13 @@ sub word_filter { shift->html_escape(@_) }
     my %Cached_next_coderefs;
 
     $FIND_NEXT_CODEREF = sub {
-        my ($self, $base, $method, $progress) = @_;
+        my ($self, $method, $start, $progress) = @_;
 
-        my $class = ref $self || $self;
+        my $class = $self->blessed || $self;
 
-        return $Cached_next_coderefs{$class, $base, $method}->[$progress]
+        return $Cached_next_coderefs{$class, $method, $start}->[$progress]
             if $Waft::Cache
-               and exists $Cached_next_coderefs{$class, $base, $method};
+               and exists $Cached_next_coderefs{$class, $method, $start};
 
         my @next_classes;
 
@@ -1541,7 +1519,7 @@ sub word_filter { shift->html_escape(@_) }
             unshift @classes, @{ "${class}::ISA" };
         }
 
-        while ( $base ne shift @next_classes ) {
+        while ( $start ne shift @next_classes ) {
             return if @next_classes == 0;
         }
 
@@ -1550,7 +1528,7 @@ sub word_filter { shift->html_escape(@_) }
             grep { $_ } map { *{ "${_}::$method" }{CODE} } @next_classes;
         };
 
-        $Cached_next_coderefs{$class, $base, $method} = \@next_coderefs;
+        $Cached_next_coderefs{$class, $method, $start} = \@next_coderefs;
 
         return $next_coderefs[$progress];
     };
@@ -1607,8 +1585,9 @@ sub add_response_header {
     return;
 }
 
-sub add_header { shift->add_response_header(@_) }
-sub header     { shift->add_response_header(@_) }
+sub header { shift->add_response_header(@_) }
+
+sub add_header { shift->header(@_) }
 
 sub make_url {
     my ($self, $page, @keys_arrayref_or_key_value_pairs) = @_;
@@ -1784,8 +1763,6 @@ sub __internal_server_error__indirect {
     return @args;
 }
 
-sub include { shift->call_template(@_) }
-
 {
     my $Defined_subs_for_under_0_99x;
 
@@ -1808,6 +1785,10 @@ sub include { shift->call_template(@_) }
             = sub { shift->initialize_response_headers(@_) };
         *init_binmode = *init_binmode
             = sub { shift->initialize_binmode(@_) };
+
+        *is_blessed = *is_blessed = sub { shift->blessed(@_) };
+
+        *ident = *ident = sub { shift->refaddr(@_) };
 
         *keys_arrayref = *keys_arrayref
             = sub { [ keys %{ $_[0]->value_hashref } ] };
@@ -1954,7 +1935,7 @@ Waft は、アプリケーションクラスの基底クラスとなって動作
 
     package MyWebApp;
 
-    use base 'Waft';
+    use base qw( Waft );
 
     __PACKAGE__->use_utf8;
     __PACKAGE__->set_default_content_type('text/html; charset=UTF-8');
@@ -2313,6 +2294,258 @@ C<page> が C<@Waft::Allow_template_file_exts> に定義されていない拡張
     alert('\x3C\/script\x3E');
 
 "<%jsstr=" は "<%j=" に省略できて、他と同様にスペースも空けられる。
+
+=head1 METHODS
+
+=head2 set_waft_backword_compatible_version
+
+引数: $version
+
+クラスメソッド。Waft の過去のバージョンを保持する。いくつかのメソッドと処理が
+指定バージョンの仕様になる。
+
+=head2 use_utf8
+
+クラスメソッド。内部処理を UTF-8 で行う。5.8.1 以上の Perl と 3.21 以上の
+L<CGI> が必要。
+
+=head2 set_allow_template_file_exts
+
+引数: @extensions
+
+クラスメソッド。クラスのモジュールが配置されているディレクトリから検索する
+対象とするテンプレートファイルの拡張子を保持する。詳細は
+L<"TEMPLATE PROCESS"> を参照の事。
+
+=head2 set_default_content_type
+
+引数: $content_type
+
+クラスメソッド。L<"header"> で Content-Type が指定されない場合の値を保持する。
+デフォルトは text/html。
+
+=head2 waft
+
+引数: @arguments?
+
+戻り値: @return_values
+
+オブジェクトの生成（L<"new">）、初期化（L<"initialize">）を行い、Waft の処理を
+行う。オブジェクトメソッドの場合は Waft の処理のみを行う。Waft の処理の詳細は 
+L<"DISPATCH"> を参照の事。指定された引数を最初に呼ぶメソッドに渡し、最後に
+呼んだメソッドの戻り値を戻す。
+
+=head2 new
+
+戻り値: $object
+
+クラスメソッド。オブジェクトの生成を行う。
+
+=head2 initialize
+
+戻り値: $object
+
+オブジェクトの初期化を行う。
+
+=head2 cgi
+
+戻り値: $cgi
+
+L<CGI> オブジェクトを戻す。
+
+=head2 set_value
+
+引数: $key, $value
+
+オブジェクト変数に値を保持する。
+
+=head2 set_values
+
+引数: $key, @values?
+
+オブジェクト変数に複数の値を保持する。
+
+=head2 get_value
+
+引数: $key, $i?
+
+戻り値: $value
+
+オブジェクト変数の値を戻す。指定された引数を複数の値に対する添え字とする。
+
+=head2 get_values
+
+引数: $key, @i?
+
+戻り値: @values
+
+オブジェクト変数の複数の値を戻す。指定された引数を添え字とする。
+
+=head2 clear_values
+
+オブジェクト変数を全て削除する。
+
+=head2 page
+
+戻り値: $page
+
+page を戻す。
+
+=head2 action
+
+戻り値: $action
+
+action を戻す。
+
+=head2 header
+
+引数: $response_header
+
+レスポンスヘッダを保持する。L<"output"> が呼ばれるまでに呼ばれる必要がある。
+add_header という別名もある。
+
+=head2 call_template
+
+引数: $page or $template_path, @arguments?
+
+戻り値: @return_values
+
+引数に指定されたページ、またはパスのファイルのテンプレート処理を行う。詳細は
+L<"TEMPLATE PROCESS"> を参照の事。include という別名もある。
+
+=head2 url
+
+引数: $page, \@keys? and/or @key_value_pairs?
+
+戻り値: $url
+
+URL を戻す。引数に指定されたページとオブジェクト変数のキー、キー値ペアを
+クエリ文字列に構成する。
+
+    $self->{page} = 0;
+    $self->{sort} = 'id';
+
+    $self->url('CURRENT', ['page', 'sort']);
+    # { page => 0, sort => 'id' } となる URL
+
+    $self->url('CURRENT', ['page']);
+    # { page => 0 } となる URL
+
+    $self->url('CURRENT', ['page'], sort => 'name');
+    # { page => 0, sort => 'name' } となる URL
+
+    $self->url('CURRENT', page => 1, sort => 'name');
+    # { page => 1, sort => 'name' } となる URL
+
+=head2 absolute_url
+
+引数: $page, \@keys? and/or @key_value_pairs?
+
+戻り値: $absolute_url
+
+http://、または https:// から始まる URL を戻す。
+
+=head2 output
+
+引数: @strings?
+
+引数に指定された値を出力する。テンプレート処理でも使用する。最初に
+呼ばれた時には、L<"header"> で指定されたレスポンスヘッダも出力する。
+
+=head2 get_content
+
+引数: $coderef, @arguments?
+
+戻り値: $content, @return_values
+
+引数で指定された無名サブルーチンを呼ぶ。その間 L<"output"> に値を出力させずに
+バッファリングさせて、バッファの内容を戻す。
+
+=head2 stash
+
+引数: $class?
+
+戻り値: $hashref
+
+クラスの名前（引数に指定されたクラス、引数が指定されない場合は呼び出し元の
+クラスの名前）毎に保持する stash のリファレンスを戻す。stash は
+アプリケーションが自由に使用できるハッシュ変数。
+
+=head2 html_escape
+
+引数: @values
+
+戻り値: @escaped_values
+
+エスケープを行う。テンプレート処理でも使用する。
+
+=head2 jsstr_escape
+
+引数: @values
+
+戻り値: @escaped_values
+
+JavaScript に必要なエスケープを行う。テンプレート処理でも使用する。
+
+=head2 url_encode
+
+引数: @values
+
+戻り値: @encoded_values
+
+URL エンコードを行う。L<"url">、L<"absolute_url"> でも使用する。
+
+=head2 warn
+
+引数: @messages?
+
+アプリケーションクラスを呼び出し元とする警告メッセージを出力する。
+
+    package MyWebApp::Base;
+
+    use base qw( Waft );
+
+    use Carp;
+
+    sub foo {
+        my ($self) = @_;
+
+        warn 'error';         # error at - line 10. # here
+        carp 'error';         # error at - line 31
+        $self->warn('error'); # error at - line 24.
+
+        return;
+    }
+
+    package MyWebApp;
+
+    use base qw( MyWebApp::Base );
+
+    sub foo {
+        my ($self) = @_;
+
+        $self->next;          # line 24
+
+        return;
+    }
+
+    package main;
+
+    MyWebApp->new->foo;       # line 31
+
+=head2 die
+
+引数: @messages?
+
+L<"warn"> と同様のメッセージを出力して例外を発生する。
+
+=head2 next
+
+引数: @arguments
+
+戻り値: @return_values
+
+継承元の同名のメソッドを呼ぶ。
 
 =head1 AUTHOR
 

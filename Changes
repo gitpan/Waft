@@ -1,5 +1,14 @@
 Revision history for Perl extension Waft.
 
+0.9910  Thu Oct 29 21:17:39 2009
+    - changed to be thread-safe
+        - changed from $Waft::Self to $__self in template. sorry...
+        - next() is safe only as instance method
+    - get_content() returns values from code on wantarray
+    - next() supports method mixed SUPER::, *:: and next()
+    - other minor spec changes
+    - added pod
+
 0.9909  Tue Oct 27 01:45:59 2009
     - waft tags are inserted before label tag as well as form tags
     - added method get_content to buffer contents

@@ -12,6 +12,7 @@ t/find_template_file-cache.t
 t/get_script_basename.t
 t/get_script_basename.t.change_test
 t/get_content.t
+t/get_content-2.t
 t/initialize.t
 t/initialize-under_0_99x.t
 t/init_page-utf8.t
