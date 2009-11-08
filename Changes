@@ -1,5 +1,13 @@
 Revision history for Perl extension Waft.
 
+0.99_90  Sun Nov  8 12:45:59 2009
+    - version 1.0 release candidate
+    - no strict and no warnings in template process. specify them each
+      templates if you need them
+    - get_content() returns undef if no contents
+    - added methods http_status() and content_type()
+    - other minor spec changes and bug fixes
+
 0.9910  Thu Oct 29 21:17:39 2009
     - changed to be thread-safe
         - changed from $Waft::Self to $__self in template. sorry...

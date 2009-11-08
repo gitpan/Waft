@@ -4,7 +4,9 @@ Makefile.PL
 README
 lib/Waft.pm
 t/1st-Waft-Test-STDERR.t
+t/2nd-Waft-Test-STDOUT.t
 t/compile_template.t
+t/die.t
 t/dont_trust_me.t
 t/expand_tabs.t
 t/find_template_file.t
@@ -13,6 +15,7 @@ t/get_script_basename.t
 t/get_script_basename.t.change_test
 t/get_content.t
 t/get_content-2.t
+t/get_content-3.t
 t/initialize.t
 t/initialize-under_0_99x.t
 t/init_page-utf8.t
@@ -23,9 +26,11 @@ t/mixin.t
 t/next.t
 t/next-2.t
 t/next-3.t
+t/output_response_headers.t
 t/text_filter.t
 t/word_filter.t
 t/Waft/Test/STDERR.pm
+t/Waft/Test/STDOUT.pm
 t/find_template_file/Waft/Test.pm
 t/find_template_file/Waft/Test/base_module1.pm
 t/find_template_file/Waft/Test/base_module2.pm

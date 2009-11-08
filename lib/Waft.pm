@@ -10,15 +10,16 @@ use Fcntl qw( :DEFAULT );
 use Symbol;
 require File::Spec;
 
-$VERSION = '0.9910';
+$VERSION = '0.99_90';
+$VERSION = eval $VERSION;
 
-$Waft::Backword_compatible_version = $VERSION;
+$Waft::Backword_compatible_version = $VERSION < 1.0 ? 1.0 : $VERSION;
 @Waft::Allow_template_file_exts = qw( .html .css .js .txt );
 $Waft::Cache = 1;
 $Waft::Correct_NEXT_DISTINCT = 1;
 
 sub import {
-    my ($base, @mixins) = @_;
+    my ($class, @mixins) = @_;
 
     if ( defined $mixins[0] and $mixins[0] eq 'with' ) {
         shift @mixins;
@@ -27,10 +28,10 @@ sub import {
     return if @mixins == 0;
 
     my $caller = caller;
-    my @bases = (@mixins, $base);
+    my @bases;
 
     BASE:
-    for my $base ( @bases ) {
+    for my $base ( @mixins, $class ) {
         if ( $base =~ /\A :: /xms ) {
             $base = 'Waft' . $base;
         }
@@ -49,9 +50,11 @@ sub import {
             }
         }
 
-        no strict 'refs';
-        push @{ "${caller}::ISA" }, $base;
+        push @bases, $base;
     }
+
+    no strict 'refs';
+    push @{ "${caller}::ISA" }, @bases;
 
     return;
 }
@@ -112,9 +115,15 @@ eval q{ use Scalar::Util qw( blessed refaddr ); 1 } or do {
 sub die {
     my ($self, @args) = @_;
 
-    $self->dont_trust_me( sub { CORE::die(@_) }, @args );
+    $self->dont_trust_me( sub { CORE::die(@_) }, @args ) if $self->BCV < 1.0;
 
-    return;
+    $self->dont_trust_me( sub { CORE::die(q{Error: }, @_) }, @args )
+        if not defined wantarray;
+
+    $self->dont_trust_me( sub { CORE::warn(q{Error: }, @_) }, @args );
+
+    return 'internal_server_error', @args if not $self->responded;
+    return @args;
 }
 
 sub dont_trust_me {
@@ -192,7 +201,13 @@ sub can_use_utf8 {
 sub warn {
     my ($self, @args) = @_;
 
-    $self->dont_trust_me( sub { CORE::warn(@_) }, @args );
+    if ($self->BCV < 1.0) {
+        $self->dont_trust_me( sub { CORE::warn(@_) }, @args );
+
+        return;
+    }
+
+    $self->dont_trust_me( sub { CORE::warn(q{Warning: }, @_) }, @args );
 
     return;
 }
@@ -699,7 +714,7 @@ sub controller {
     }
 
     my $stash = $self->stash;
-    my $call_count;
+    my $forward_count;
     METHOD:
     while ( not $stash->{responded} ) {
         if ( my $coderef = $self->can('before') ) {
@@ -733,7 +748,7 @@ sub controller {
     }
     continue {
         $self->die('Methods called too many times in controller')
-            if ++$call_count > 4;
+            if ++$forward_count >= 5;
     }
 
     if ( $self->can('end') ) {
@@ -1100,7 +1115,7 @@ sub compile_template {
     }
 
     if ( defined $template_file ) {
-        $template = qq{# line 1 "$template_file"$break} . $template;
+        $template = qq{$break# line 1 "$template_file"$break} . $template;
     }
 
     my $coderef = $self->compile(\$template);
@@ -1297,6 +1312,9 @@ sub convert_text_part {
 {
     package Waft::compile;
 
+    no strict;
+    BEGIN { 'warnings'->unimport if eval { require warnings } }
+
     sub Waft::compile { eval ${ $_[1] } }
 }
 
@@ -1320,15 +1338,24 @@ sub convert_text_part {
 sub output_response_headers {
     my ($self) = @_;
 
+    my ($http_status, $content_type);
+
+    RESPONSE_HEADER:
     for my $response_header ( $self->get_response_headers ) {
         print "$response_header\x0D\x0A";
+
+        if ( $response_header =~ /\A Status: \s* (.*) /ixms ) {
+            $http_status = $1;
+        }
+
+        if ( $response_header =~ /\A Content-Type: \s* (.*) /ixms ) {
+            $content_type = $1;
+        }
     }
 
     if ($self->BCV < 0.53) {
-        if ( not grep { /\A Content-Type: /ixms
-                      } $self->get_response_headers
-        ) {
-            my $content_type = $self->stash->{content_type};
+        if ( not defined $content_type ) {
+            $content_type = $self->stash->{content_type};
             print "Content-Type: $content_type\x0D\x0A";
         }
 
@@ -1337,11 +1364,15 @@ sub output_response_headers {
         return;
     }
 
-    if ( not grep { /\A Content-Type: /ixms } $self->get_response_headers ) {
-        print 'Content-Type: ' . $self->get_default_content_type . "\x0D\x0A";
+    if ( not defined $content_type ) {
+        $content_type = $self->get_default_content_type;
+        print "Content-Type: $content_type\x0D\x0A";
     }
 
     print "\x0D\x0A";
+
+    @{ $self->stash }{ qw( http_status content_type ) }
+        = ($http_status, $content_type);
 
     return;
 }
@@ -1354,6 +1385,8 @@ sub get_response_headers {
     return @{ $self->stash->{response_headers} }
 }
 
+sub responded { $_[0]->stash->{responded} }
+
 {
     my $BUFFER_CONTENT_CODEREF;
 
@@ -1362,7 +1395,7 @@ sub get_response_headers {
 
         my $stash = $self->stash;
 
-        push @{ $stash->{contents} }, q{};
+        push @{ $stash->{contents} }, undef;
 
         local $stash->{output} = $BUFFER_CONTENT_CODEREF
             if @{ $stash->{contents} } == 1;
@@ -1372,8 +1405,9 @@ sub get_response_headers {
         return pop @{ $stash->{contents} };
     }
 
-    $BUFFER_CONTENT_CODEREF
-        = sub { shift->stash->{contents}->[-1] .= join q{}, @_; return };
+    $BUFFER_CONTENT_CODEREF = sub {
+        shift->stash->{contents}[-1] .= join q{}, @_ if @_ > 1; return;
+    };
 }
 
 sub jsstr_filter { shift->jsstr_escape(@_) }
@@ -1562,6 +1596,61 @@ sub get_value {
     return( ( $self->get_values($key, @i) )[0] );
 }
 
+sub http_status {
+    return $_[0]->stash->{http_status} if @_ == 1;
+    my ($self, $http_status) = @_;
+
+    $self->set_response_header("Status: $http_status");
+
+    return;
+}
+
+sub content_type {
+    return $_[0]->stash->{content_type} if @_ == 1;
+    my ($self, $content_type) = @_;
+
+    $self->set_response_header("Content-Type: $content_type");
+
+    return;
+}
+
+sub set_response_header {
+    my ($self, $response_header) = @_;
+
+    if ( $self->stash->{responded} ) {
+        $self->warn('Too late to set response header');
+
+        return;
+    }
+
+    if ( $response_header =~ /\A ([^:]+) /xms ) {
+        my $field = $1;
+        $self->unset_response_header($field);
+    }
+
+    $self->add_response_header($response_header);
+
+    return;
+}
+
+sub unset_response_header {
+    my ($self, $response_header_field) = @_;
+
+    my $stash = $self->stash;
+
+    if ( $stash->{responded} ) {
+        $self->warn('Too late to unset response header');
+
+        return;
+    }
+
+    @{ $stash->{response_headers} }
+        = grep { not /\A \Q$response_header_field\E: /ixms }
+               @{ $stash->{response_headers} };
+
+    return;
+}
+
 sub add_response_header {
     my ($self, $response_header) = @_;
 
@@ -1571,16 +1660,24 @@ sub add_response_header {
         my $stash = $self->stash;
         for my $response_header_block ( @response_header_blocks ) {
             my @response_header_lines
-                = grep { length > 0
-                       } split /[\x0A\x0D]+/, $response_header_block;
+                = grep { length > 0 }
+                       split /[\x0A\x0D]+/, $response_header_block;
             push @{ $stash->{headers} }, @response_header_lines;
         }
 
         return;
     }
 
+    my $stash = $self->stash;
+
+    if ( $stash->{responded} ) {
+        $self->warn('Too late to add response header');
+
+        return;
+    }
+
     $response_header =~ s/ [\x0A\x0D]+ //gxms;
-    push @{ $self->stash->{response_headers} }, $response_header;
+    push @{ $stash->{response_headers} }, $response_header;
 
     return;
 }
@@ -1705,16 +1802,18 @@ sub get_base_url {
 sub __forbidden__indirect {
     my ($self, @args) = @_;
 
-    $self->add_response_header('Status: 403 Forbidden');
-    $self->add_response_header('Content-Type: text/html; charset=ISO8859-1');
+    $self->http_status('403 Forbidden');
+    $self->content_type('text/html; charset=ISO8859-1');
+
+    my $escaped_request_uri = $self->html_escape($ENV{REQUEST_URI});
 
     $self->output(qq{<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">\n});
     $self->output(qq{<html><head>\n});
     $self->output(qq{<title>403 Forbidden</title>\n});
     $self->output(qq{</head><body>\n});
     $self->output(qq{<h1>Forbidden</h1>\n});
-    $self->output( q{<p>You don't have permission to access this page.});
-    $self->output(qq{</p>\n});
+    $self->output( q{<p>You don't have permission to access});
+    $self->output(qq{ $escaped_request_uri\non this server.</p>\n});
     $self->output(qq{</body></html>\n});
 
     return @args;
@@ -1723,15 +1822,18 @@ sub __forbidden__indirect {
 sub __not_found__indirect {
     my ($self, @args) = @_;
 
-    $self->add_response_header('Status: 404 Not Found');
-    $self->add_response_header('Content-Type: text/html; charset=ISO8859-1');
+    $self->http_status('404 Not Found');
+    $self->content_type('text/html; charset=ISO8859-1');
+
+    my $escaped_request_uri = $self->html_escape($ENV{REQUEST_URI});
 
     $self->output(qq{<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">\n});
     $self->output(qq{<html><head>\n});
     $self->output(qq{<title>404 Not Found</title>\n});
     $self->output(qq{</head><body>\n});
     $self->output(qq{<h1>Not Found</h1>\n});
-    $self->output(qq{<p>The requested URL was not found.</p>\n});
+    $self->output(qq{<p>The requested URL $escaped_request_uri});
+    $self->output(qq{ was not found on this server.</p>\n});
     $self->output(qq{</body></html>\n});
 
     return @args;
@@ -1740,8 +1842,10 @@ sub __not_found__indirect {
 sub __internal_server_error__indirect {
     my ($self, @args) = @_;
 
-    $self->add_response_header('Status: 500 Internal Server Error');
-    $self->add_response_header('Content-Type: text/html; charset=ISO8859-1');
+    $self->http_status('500 Internal Server Error');
+    $self->content_type('text/html; charset=ISO8859-1');
+
+    my $escaped_server_admin = $self->html_escape($ENV{SERVER_ADMIN});
 
     $self->output(qq{<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">\n});
     $self->output(qq{<html><head>\n});
@@ -1751,7 +1855,8 @@ sub __internal_server_error__indirect {
     $self->output(qq{<p>The server encountered an internal error or\n});
     $self->output(qq{misconfiguration and was unable to complete\n});
     $self->output(qq{your request.</p>\n});
-    $self->output(qq{<p>Please contact the server administrator\n});
+    $self->output(qq{<p>Please contact the server administrator,\n});
+    $self->output(qq{ $escaped_server_admin});
     $self->output(qq{ and inform them of the time the error occurred,\n});
     $self->output(qq{and anything you might have done that may have\n});
     $self->output(qq{caused the error.</p>\n});
@@ -2389,13 +2494,13 @@ L<CGI> オブジェクトを戻す。
 
 戻り値: $page
 
-page を戻す。
+C<page> を戻す。
 
 =head2 action
 
 戻り値: $action
 
-action を戻す。
+C<action> を戻す。
 
 =head2 header
 
@@ -2403,6 +2508,27 @@ action を戻す。
 
 レスポンスヘッダを保持する。L<"output"> が呼ばれるまでに呼ばれる必要がある。
 add_header という別名もある。
+
+=head2 http_status
+
+引数: $http_status?
+
+戻り値: $http_status
+
+Status: ヘッダを保持する。Status: ヘッダが存在する場合は置き換える。
+
+引数が指定されない場合は、出力した Status: ヘッダの値を戻す。
+
+=head2 content_type
+
+引数: $content_type?
+
+戻り値: $content_type
+
+Content-Type: ヘッダを保持する。Content-Type: ヘッダが存在する場合は
+置き換える。
+
+引数が指定されない場合は、出力した Content-Type: ヘッダの値を戻す。
 
 =head2 call_template
 
@@ -2537,7 +2663,21 @@ URL エンコードを行う。L<"url">、L<"absolute_url"> でも使用する�
 
 引数: @messages?
 
-L<"warn"> と同様のメッセージを出力して例外を発生する。
+戻り値: ( $page?, @messages )?
+
+L<"warn"> と同様のメッセージを出力する。無効コンテキストの場合は例外を
+発生させる。
+
+無効コンテキストでない場合、例外は発生させない。L<"output"> が呼ばれていない
+場合は、"internal_server_error", @messages を戻す。これは return への
+引数として使用する事を想定した動作である。
+
+    return $self->die('Permission denied');
+
+この結果、Waft に定義されているアクションメソッド
+C<__internal_server_error__indirect> を呼び、Waft の処理を完了する。
+
+L<"output"> が呼ばれている場合は、@messages のみを戻す。
 
 =head2 next
 

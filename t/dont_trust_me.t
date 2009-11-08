@@ -14,7 +14,7 @@ require Waft::Test::STDERR;
 
     __PACKAGE__->warn; my $line = __LINE__;
 
-    ok( $stderr->get =~ /\Asomething's wrong at \Q$0\E line $line\./ms );
+    ok( $stderr->get =~ /\AWarning: something's wrong at \Q$0\E line $line\./ms );
 }
 
 {
@@ -22,7 +22,7 @@ require Waft::Test::STDERR;
 
     __PACKAGE__->warn(q{}); my $line = __LINE__;
 
-    ok( $stderr->get =~ /\Asomething's wrong at \Q$0\E line $line\./ms );
+    ok( $stderr->get =~ /\AWarning: something's wrong at \Q$0\E line $line\./ms );
 }
 
 {
@@ -30,7 +30,7 @@ require Waft::Test::STDERR;
 
     __PACKAGE__->warn('error'); my $line = __LINE__;
 
-    ok( $stderr->get =~ /\Aerror at \Q$0\E line $line\./ms );
+    ok( $stderr->get =~ /\AWarning: error at \Q$0\E line $line\./ms );
 }
 
 {

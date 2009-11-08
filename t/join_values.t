@@ -25,7 +25,7 @@ ok( $obj->join_values('ALL_VALUES') eq '%20%25%2d-%20%25%2d a- b-- c' );
 
 $obj->clear_values;
 
-ok( @{ $obj->keys_arrayref } == 0 );
+ok( keys %{ $obj->value_hashref } == 0 );
 
 $obj->initialize_values('%20%25%2d-%20%25%2d a- b-- c');
 

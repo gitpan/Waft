@@ -7,7 +7,10 @@ BEGIN { eval { require warnings } ? 'warnings'->import : ( $^W = 1 ) }
 use Carp;
 use Symbol;
 
-$VERSION = '1.0';
+$VERSION = '1.01';
+
+binmode STDERR;
+select( ( select(STDERR), $| = 1 )[0] );
 
 sub new {
     my ($class) = @_;
@@ -41,6 +44,7 @@ sub get {
     my $stderr = gensym;
     open $stderr, '<t/STDERR.test'
         or croak 'Failed to open file piped from STDERR';
+    binmode $stderr;
 
     return do { local $/; <$stderr> };
 }
